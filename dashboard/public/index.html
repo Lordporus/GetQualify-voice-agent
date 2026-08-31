@@ -1,0 +1,486 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <title>GetQualify, AI voice agents from ₹1/min</title>
+  <meta name="description" content="AI voice agents from ₹1 per minute for the promotional AI layer, excluding telephony and carrier charges. Provider agnostic, multi tenant, INR billed, with real inbound and outbound calling." />
+  <meta name="theme-color" content="#06070A" />
+
+  <!-- Open Graph -->
+  <meta property="og:type" content="website" />
+  <meta property="og:title" content="GetQualify. AI voice agents from ₹1/min" />
+  <meta property="og:description" content="The promotional AI layer starts at ₹1 per minute; telephony and carrier charges are separate. Provider agnostic, multi tenant, sub 2s streaming, INR billed." />
+  <meta property="og:image" content="/assets/og.svg" />
+  <meta name="twitter:card" content="summary_large_image" />
+
+  <link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+  <!-- brand tokens FIRST, then page styles -->
+  <link rel="stylesheet" href="/assets/brand.css" />
+  <link rel="stylesheet" href="/assets/marketing.css" />
+</head>
+<body>
+  <!-- Backdrop atmosphere (decorative only) -->
+  <div class="atmos" aria-hidden="true">
+    <div class="glow g1"></div>
+    <div class="glow g2"></div>
+    <div class="glow g3"></div>
+  </div>
+
+  <a class="skip-link" href="#hero">Skip to content</a>
+
+  <!-- ============================ NAV ============================ -->
+  <header class="nav" id="nav">
+    <div class="wrap nav-inner">
+      <a class="nav-brand" href="/" aria-label="GetQualify home">
+        <img class="nav-logo" src="/assets/logo.svg" alt="GetQualify" width="34" height="34" />
+        <span class="nav-name">Get<span class="grad-text">Qualify</span></span>
+      </a>
+      <nav class="nav-links" aria-label="Primary">
+        <a href="#benefits">Platform</a>
+        <a href="#how">How it works</a>
+        <a href="#agencies">Agencies</a>
+        <a href="#economics">Economics</a>
+        <a href="#faq">FAQ</a>
+      </nav>
+      <div class="nav-cta">
+        <a class="btn btn-quiet btn-sm nav-login" href="/app.html">Sign in</a>
+        <a class="btn btn-primary btn-sm magnetic" href="/app.html">Launch console</a>
+      </div>
+      <button class="nav-burger" id="navBurger" aria-label="Open menu" aria-expanded="false">
+        <span></span><span></span><span></span>
+      </button>
+    </div>
+    <div class="nav-mobile" id="navMobile" hidden>
+      <a href="#benefits">Platform</a>
+      <a href="#how">How it works</a>
+      <a href="#agencies">Agencies</a>
+      <a href="#economics">Economics</a>
+      <a href="#faq">FAQ</a>
+      <a class="btn btn-primary" href="/app.html">Launch console</a>
+    </div>
+  </header>
+
+  <main>
+    <!-- ============================ HERO ============================ -->
+    <section class="hero section" id="hero">
+      <div class="hairline-grid" aria-hidden="true"></div>
+      <div class="wrap hero-inner">
+        <div class="hero-copy">
+          <span class="pill hero-pill reveal">
+            <span class="dot"></span>
+            Live on Rumik, Gemini and VoBiz through Dograh
+          </span>
+          <h1 class="t-display hero-h1 reveal" data-d="1">
+            Voice agents your customers <span class="grad-text">can't tell from human.</span>
+            From ₹1/min for the AI layer.
+          </h1>
+          <p class="t-lead hero-sub reveal" data-d="2">
+            Production AI voice agents on a provider agnostic engine. Rumik silk TTS at roughly
+            twenty times the value of ElevenLabs, Gemini for the brain, real inbound and outbound
+            telephony on your own numbers. Multi tenant for agencies, INR billed, first audio under
+            two seconds. Telephony, PSTN, phone numbers, servers and taxes are billed separately.
+          </p>
+          <div class="hero-actions reveal" data-d="3">
+            <a class="btn btn-primary btn-lg magnetic" href="/app.html">
+              Launch console
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </a>
+            <a class="btn btn-ghost btn-lg magnetic" href="#economics">See the economics</a>
+          </div>
+          <div class="hero-trust reveal" data-d="4">
+            <span class="trust-label">Built on</span>
+            <span class="chip">Rumik silk TTS</span>
+            <span class="chip">Gemini</span>
+            <span class="chip">VoBiz</span>
+            <span class="chip">Cloudflare R2</span>
+          </div>
+        </div>
+
+        <!-- Live voltage orb / waveform motif (driven by marketing.js) -->
+        <div class="hero-visual reveal" data-d="2" aria-hidden="true">
+          <div class="orb-stage">
+            <div class="orb-ring"></div>
+            <div class="orb-ring orb-ring-2"></div>
+            <canvas id="voiceCanvas" class="voice-canvas" width="520" height="520"></canvas>
+            <div class="orb-readout">
+              <div class="readout-row"><span class="readout-k">First audio</span><span class="readout-v">1.7s</span></div>
+              <div class="readout-row"><span class="readout-k">Cost / 1k chars</span><span class="readout-v gold">₹0.50</span></div>
+              <div class="readout-row"><span class="readout-k">Engine</span><span class="readout-v">Streaming</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Economics marquee strip -->
+      <div class="marquee reveal" aria-hidden="true">
+        <div class="marquee-track">
+          <span>About ₹0.50 per 1000 characters</span><span class="sep">•</span>
+          <span>Roughly 20x cheaper than ElevenLabs</span><span class="sep">•</span>
+          <span>Sub 2s first audio</span><span class="sep">•</span>
+          <span>Provider agnostic, never locked in</span><span class="sep">•</span>
+          <span>Multi tenant for agencies</span><span class="sep">•</span>
+          <span>Real inbound and outbound telephony</span><span class="sep">•</span>
+          <span>INR billed</span><span class="sep">•</span>
+          <span>About ₹0.50 per 1000 characters</span><span class="sep">•</span>
+          <span>Roughly 20x cheaper than ElevenLabs</span><span class="sep">•</span>
+          <span>Sub 2s first audio</span><span class="sep">•</span>
+          <span>Provider agnostic, never locked in</span><span class="sep">•</span>
+          <span>Multi tenant for agencies</span><span class="sep">•</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== BENEFITS / HOW WE HELP ===================== -->
+    <section class="section benefits" id="benefits">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="t-eyebrow reveal">The platform</span>
+          <h2 class="t-h1 reveal" data-d="1">Everything a real voice product needs. Nothing you have to glue together.</h2>
+          <p class="t-lead reveal" data-d="2">The voice engine, the brain and the phone lines are already live and verified. We wrap them in tenants, auth, an agent builder and usage economics so you ship instead of integrate.</p>
+        </div>
+
+        <div class="grid grid-3">
+          <article class="card card-pad card-glow reveal feature">
+            <div class="feature-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M12 2v20M7 6v12M17 6v12M2.5 9.5v5M21.5 9.5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </div>
+            <h3 class="t-h3">20x cheaper economics</h3>
+            <p class="soft">About ₹0.50 per thousand characters on Rumik silk TTS. Roughly twenty times the value of ElevenLabs for voice your customers cannot place as synthetic.</p>
+          </article>
+
+          <article class="card card-pad card-glow reveal feature" data-d="1">
+            <div class="feature-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h10M4 12h16M4 17h7" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="18" cy="7" r="2.4" stroke="currentColor" stroke-width="2"/><circle cx="15" cy="17" r="2.4" stroke="currentColor" stroke-width="2"/></svg>
+            </div>
+            <h3 class="t-h3">Provider agnostic engine</h3>
+            <p class="soft">Swap any TTS, LLM or telephony vendor without a rewrite. Rumik, Gemini and VoBiz through Dograh are live today. ElevenLabs, Sarvam, Claude, Twilio and Zoom are one key away.</p>
+          </article>
+
+          <article class="card card-pad card-glow reveal feature" data-d="2">
+            <div class="feature-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="4" width="7" height="7" rx="1.6" stroke="currentColor" stroke-width="2"/><rect x="14" y="4" width="7" height="7" rx="1.6" stroke="currentColor" stroke-width="2"/><rect x="3" y="14" width="7" height="7" rx="1.6" stroke="currentColor" stroke-width="2"/><rect x="14" y="14" width="7" height="7" rx="1.6" stroke="currentColor" stroke-width="2"/></svg>
+            </div>
+            <h3 class="t-h3">Multi tenant workspaces</h3>
+            <p class="soft">Isolated tenants, owners and agents from day one. Spin up a workspace per client, brand it, and keep every byte of data scoped so nothing ever crosses.</p>
+          </article>
+
+          <article class="card card-pad card-glow reveal feature" data-d="1">
+            <div class="feature-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M6.5 3.5l3 1 1.5 3-2 1.5a12 12 0 0 0 5.5 5.5l1.5-2 3 1.5 1 3a2 2 0 0 1-2 2.4A16 16 0 0 1 4.1 6.5 2 2 0 0 1 6.5 3.5Z" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+            </div>
+            <h3 class="t-h3">Real telephony on your DIDs</h3>
+            <p class="soft">Live inbound and outbound calling on your own VoBiz numbers through Dograh. Place a real call from the console and route inbound calls to an agent.</p>
+          </article>
+
+          <article class="card card-pad card-glow reveal feature" data-d="2">
+            <div class="feature-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><path d="M3 12h4l2.5-7 5 16 2.5-9h4" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </div>
+            <h3 class="t-h3">Sub 2s streaming</h3>
+            <p class="soft">First audio under two seconds with streaming synthesis, so conversations feel like a person picking up, not a bot buffering. No awkward dead air.</p>
+          </article>
+
+          <article class="card card-pad card-glow reveal feature" data-d="3">
+            <div class="feature-ico" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2"/><path d="M12 7.5v9M14.4 9.6c-.6-.7-1.5-1.1-2.6-1.1-1.6 0-2.6.8-2.6 1.9 0 2.7 5.4 1.4 5.4 4.1 0 1.2-1.1 2-2.8 2-1.2 0-2.1-.4-2.7-1.2" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+            </div>
+            <h3 class="t-h3">INR billed, no surprises</h3>
+            <p class="soft">Priced and billed in rupees with usage you can actually read. Characters, calls and tokens per tenant, mapped straight to cost so margins are never a mystery.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== TESTIMONIALS (sample) ===================== -->
+    <section class="section testimonials" id="testimonials">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="t-eyebrow reveal">Built to be shown off</span>
+          <h2 class="t-h1 reveal" data-d="1">What teams say when the bot sounds human</h2>
+          <p class="t-lead reveal" data-d="2"><span class="sample-tag">Sample placeholders</span> structured to drop in real quotes. Avatars are deterministic, no stock faces.</p>
+        </div>
+
+        <div class="grid grid-3">
+          <figure class="card card-pad card-glow reveal quote-card">
+            <div class="quote-mark" aria-hidden="true">&#8220;</div>
+            <blockquote>Our front desk never sleeps now. Callers ask if it is a new hire. The cost line is the part our finance team still does not believe.</blockquote>
+            <figcaption class="quote-by">
+              <span class="avatar" data-name="Aarav Mehta" aria-hidden="true"></span>
+              <span class="by-meta"><span class="by-name">Aarav Mehta</span><span class="by-role">Ops lead, sample clinic group</span></span>
+            </figcaption>
+          </figure>
+
+          <figure class="card card-pad card-glow reveal quote-card" data-d="1">
+            <div class="quote-mark" aria-hidden="true">&#8220;</div>
+            <blockquote>We resell this to twelve clients from one console. Each tenant is walled off, branded, and we never touched a line of infrastructure.</blockquote>
+            <figcaption class="quote-by">
+              <span class="avatar" data-name="Priya Nair" aria-hidden="true"></span>
+              <span class="by-meta"><span class="by-name">Priya Nair</span><span class="by-role">Founder, sample voice agency</span></span>
+            </figcaption>
+          </figure>
+
+          <figure class="card card-pad card-glow reveal quote-card" data-d="2">
+            <div class="quote-mark" aria-hidden="true">&#8220;</div>
+            <blockquote>Swapping the voice vendor used to be a quarter of engineering. Here it is a dropdown. That alone is why we picked it.</blockquote>
+            <figcaption class="quote-by">
+              <span class="avatar" data-name="Rohan Iyer" aria-hidden="true"></span>
+              <span class="by-meta"><span class="by-name">Rohan Iyer</span><span class="by-role">CTO, sample SaaS</span></span>
+            </figcaption>
+          </figure>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== HOW IT WORKS (benefit 1) ===================== -->
+    <section class="section how" id="how">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="t-eyebrow reveal">How it works</span>
+          <h2 class="t-h1 reveal" data-d="1">Three steps from idea to a phone that answers</h2>
+          <p class="t-lead reveal" data-d="2">No glue code, no vendor negotiations. Build the agent, give it a voice, ship it to a phone line or the web.</p>
+        </div>
+
+        <div class="grid grid-3 steps">
+          <article class="card card-pad reveal step">
+            <span class="step-no">01</span>
+            <h3 class="t-h3">Build the agent</h3>
+            <p class="soft">Write the persona and the greeting, set the guardrails. Gemini powers the brain, so it stays on script and on brand through the whole call.</p>
+          </article>
+          <div class="step-arrow reveal" data-d="1" aria-hidden="true">
+            <svg viewBox="0 0 40 24" fill="none"><path d="M2 12h34M28 5l8 7-8 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <article class="card card-pad reveal step" data-d="1">
+            <span class="step-no">02</span>
+            <h3 class="t-h3">Pick the voice</h3>
+            <p class="soft">Choose a Rumik model, speaker and pitch in the voice studio. Preview it instantly, tune until it sounds like the person you wish you could hire.</p>
+          </article>
+          <div class="step-arrow reveal" data-d="2" aria-hidden="true">
+            <svg viewBox="0 0 40 24" fill="none"><path d="M2 12h34M28 5l8 7-8 7" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </div>
+          <article class="card card-pad reveal step" data-d="2">
+            <span class="step-no">03</span>
+            <h3 class="t-h3">Ship to phone or web</h3>
+            <p class="soft">Assign a DID and it answers calls, or drop it on the web to talk in the browser. Same agent, two surfaces, both live in minutes.</p>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== BUILT FOR AGENCIES (benefit 2) ===================== -->
+    <section class="section agencies" id="agencies">
+      <div class="wrap agencies-inner">
+        <div class="agencies-copy">
+          <span class="t-eyebrow reveal">Built for agencies</span>
+          <h2 class="t-h1 reveal" data-d="1">One console. Every client walled off, branded and billed.</h2>
+          <p class="t-lead reveal" data-d="2">Multi tenant is not a feature we bolted on. It is the spine. Each client is an isolated workspace with its own agents, numbers, branding and usage, and a hard wall so data never crosses between tenants.</p>
+          <ul class="check-list reveal" data-d="3">
+            <li><span class="ck" aria-hidden="true"></span> Isolated tenants with owner and member roles</li>
+            <li><span class="ck" aria-hidden="true"></span> Per tenant branding color and agents</li>
+            <li><span class="ck" aria-hidden="true"></span> Usage and cost scoped to each workspace</li>
+            <li><span class="ck" aria-hidden="true"></span> Provider registry shows what is live vs ready to wire</li>
+          </ul>
+          <a class="btn btn-ghost magnetic reveal" data-d="3" href="/app.html">Open the console</a>
+        </div>
+
+        <!-- On-brand HTML/SVG dashboard mock (not a screenshot) -->
+        <div class="dash-mock reveal" data-d="1" aria-hidden="true">
+          <div class="dash-chrome">
+            <span class="dot-r"></span><span class="dot-y"></span><span class="dot-g"></span>
+            <span class="dash-url">console.getqualify.in / overview</span>
+          </div>
+          <div class="dash-body">
+            <aside class="dash-side">
+              <span class="dash-logo"></span>
+              <span class="dash-nav active">Overview</span>
+              <span class="dash-nav">Agents</span>
+              <span class="dash-nav">Voice Studio</span>
+              <span class="dash-nav">Telephony</span>
+              <span class="dash-nav">Settings</span>
+            </aside>
+            <div class="dash-main">
+              <div class="dash-row dash-chips">
+                <span class="dchip ok">TTS Rumik</span>
+                <span class="dchip ok">LLM Gemini</span>
+                <span class="dchip ok">VoBiz via Dograh</span>
+              </div>
+              <div class="dash-cards">
+                <div class="dcard"><span class="dk">Calls today</span><span class="dv">128</span></div>
+                <div class="dcard"><span class="dk">Characters</span><span class="dv">1.2M</span></div>
+                <div class="dcard"><span class="dk">Cost</span><span class="dv gold">₹612</span></div>
+              </div>
+              <div class="dash-spark">
+                <svg viewBox="0 0 320 80" preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id="dsg" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0" stop-color="#6E7BFF" stop-opacity="0.45"/>
+                      <stop offset="1" stop-color="#6E7BFF" stop-opacity="0"/>
+                    </linearGradient>
+                  </defs>
+                  <path d="M0 60 L40 52 L80 56 L120 38 L160 44 L200 24 L240 30 L280 14 L320 20 L320 80 L0 80 Z" fill="url(#dsg)"/>
+                  <path d="M0 60 L40 52 L80 56 L120 38 L160 44 L200 24 L240 30 L280 14 L320 20" fill="none" stroke="#7C8BFF" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                </svg>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== PROOF / SECOND TESTIMONIAL ===================== -->
+    <section class="section proof" id="proof">
+      <div class="wrap">
+        <div class="section-head">
+          <span class="t-eyebrow reveal">The receipts</span>
+          <h2 class="t-h1 reveal" data-d="1">The economics, in numbers</h2>
+        </div>
+        <div class="metric-band reveal" data-d="1">
+          <div class="metric">
+            <span class="m-v gold">₹0.50</span>
+            <span class="m-k">per 1000 characters</span>
+          </div>
+          <div class="metric">
+            <span class="m-v">20x</span>
+            <span class="m-k">cheaper than ElevenLabs</span>
+          </div>
+          <div class="metric">
+            <span class="m-v">&lt;2s</span>
+            <span class="m-k">first audio, streaming</span>
+          </div>
+          <div class="metric">
+            <span class="m-v">3</span>
+            <span class="m-k">live providers, swappable</span>
+          </div>
+        </div>
+
+        <div class="logo-band reveal" data-d="2" aria-label="Powered by">
+          <span class="logo-chip">Rumik silk TTS</span>
+          <span class="logo-chip">Gemini</span>
+          <span class="logo-chip">VoBiz</span>
+          <span class="logo-chip">Cloudflare R2</span>
+          <span class="logo-chip ghost">ElevenLabs ready</span>
+          <span class="logo-chip ghost">Twilio ready</span>
+          <span class="logo-chip ghost">Claude ready</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== CLOSING (economics vivid + CTA) ===================== -->
+    <section class="section closing" id="economics">
+      <div class="hairline-grid" aria-hidden="true"></div>
+      <div class="wrap closing-inner">
+        <div class="closing-copy reveal">
+          <span class="t-eyebrow">AI layer from ₹1/min</span>
+          <h2 class="t-display closing-h2">The same voice. <span class="grad-text">A twentieth of the bill.</span></h2>
+          <p class="t-lead">Every other stack charges you premium for synthetic speech that still sounds synthetic. We pair the voice your customers cannot place with billing in rupees and an engine you are never locked into. That is the whole pitch, and the math is on the right.</p>
+          <div class="closing-actions">
+            <a class="btn btn-primary btn-lg magnetic" href="/app.html">Launch console</a>
+            <a class="btn btn-ghost btn-lg magnetic" href="#faq">Read the FAQ</a>
+          </div>
+        </div>
+
+        <!-- Vivid cost compare -->
+        <div class="compare reveal" data-d="1" aria-hidden="true">
+          <div class="compare-row them">
+            <div class="compare-head">
+              <span class="compare-label">Typical premium TTS</span>
+              <span class="compare-price">~₹20<span class="per">/1k chars</span></span>
+            </div>
+            <div class="compare-bar"><span style="width:100%"></span></div>
+          </div>
+          <div class="compare-row us">
+            <div class="compare-head">
+              <span class="compare-label">GetQualify on Rumik</span>
+              <span class="compare-price gold">~₹0.50<span class="per">/1k chars</span></span>
+            </div>
+            <div class="compare-bar"><span class="us-fill" style="width:2.5%"></span></div>
+          </div>
+          <p class="compare-note">At 1,000,000 characters a month, that is about ₹20,000 against ₹500. Same human quality voice.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ===================== FAQ ===================== -->
+    <section class="section faq" id="faq">
+      <div class="wrap faq-inner">
+        <div class="section-head">
+          <span class="t-eyebrow reveal">Questions</span>
+          <h2 class="t-h1 reveal" data-d="1">The things people ask first</h2>
+        </div>
+
+        <div class="faq-list reveal" data-d="1">
+          <details class="faq-item" open>
+            <summary>How is it about 20x cheaper than ElevenLabs?<span class="faq-ic" aria-hidden="true"></span></summary>
+            <div class="faq-a"><p>The voice runs on Rumik silk TTS, which lands around ₹0.50 per thousand characters for quality comparable to premium vendors. ElevenLabs and similar stacks sit roughly twenty times higher for the same volume. Same human grade voice, a fraction of the bill, billed in rupees.</p></div>
+          </details>
+          <details class="faq-item">
+            <summary>What does provider agnostic actually mean?<span class="faq-ic" aria-hidden="true"></span></summary>
+            <div class="faq-a"><p>Three layers, each a registry of adapters: TTS, the LLM brain, and telephony. Rumik, Gemini and VoBiz through Dograh are live today. ElevenLabs, Sarvam, Claude, Twilio and Zoom are stubs that go live the moment you add their key. Swapping a vendor is a setting, not a rewrite, so you are never locked in.</p></div>
+          </details>
+          <details class="faq-item">
+            <summary>Is it really multi tenant for an agency?<span class="faq-ic" aria-hidden="true"></span></summary>
+            <div class="faq-a"><p>Yes. Every workspace is an isolated tenant with its own users, agents, numbers, branding and usage. Tenant isolation is enforced on every read and write, so one client can never see or touch another client's data. You resell from a single console.</p></div>
+          </details>
+          <details class="faq-item">
+            <summary>Can it make and take real phone calls?<span class="faq-ic" aria-hidden="true"></span></summary>
+            <div class="faq-a"><p>Real inbound and outbound telephony runs through Dograh using your VoBiz numbers. Outbound dialing is guarded behind an explicit confirm so a paid call is never placed by accident. You can inspect the active configuration, numbers, and workflow routing in the console.</p></div>
+          </details>
+          <details class="faq-item">
+            <summary>How fast does the agent start talking?<span class="faq-ic" aria-hidden="true"></span></summary>
+            <div class="faq-a"><p>First audio lands under two seconds with streaming synthesis. The result is a call that feels like a person picking up rather than a bot buffering, which is the difference between a customer staying on the line and hanging up.</p></div>
+          </details>
+          <details class="faq-item">
+            <summary>What do I need to run it?<span class="faq-ic" aria-hidden="true"></span></summary>
+            <div class="faq-a"><p>One portable folder and Node. Zero npm dependencies, no build step, no framework. Copy the folder, run the server, and the console plus the API are live. The live keys are already wired and the demo tenant is seeded on first boot.</p></div>
+          </details>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ===================== FOOTER ===================== -->
+  <footer class="footer">
+    <div class="wrap footer-inner">
+      <div class="footer-top">
+        <div class="footer-brand">
+          <a class="nav-brand" href="/" aria-label="GetQualify home">
+            <img class="nav-logo" src="/assets/logo.svg" alt="GetQualify" width="32" height="32" />
+            <span class="nav-name">Get<span class="grad-text">Qualify</span></span>
+          </a>
+          <p class="footer-tag soft">AI voice agents from ₹1/min for the promotional AI layer. Telephony is separate.</p>
+          <a class="btn btn-primary btn-sm magnetic" href="/app.html">Launch console</a>
+        </div>
+        <nav class="footer-cols" aria-label="Footer">
+          <div class="footer-col">
+            <span class="footer-h">Platform</span>
+            <a href="#benefits">Benefits</a>
+            <a href="#how">How it works</a>
+            <a href="#agencies">For agencies</a>
+            <a href="#economics">Economics</a>
+          </div>
+          <div class="footer-col">
+            <span class="footer-h">Product</span>
+            <a href="/app.html">Console</a>
+            <a href="/app.html">Voice Studio</a>
+            <a href="/app.html">Telephony</a>
+            <a href="#faq">FAQ</a>
+          </div>
+          <div class="footer-col">
+            <span class="footer-h">Stack</span>
+            <span class="footer-static soft">Rumik silk TTS</span>
+            <span class="footer-static soft">Gemini</span>
+            <span class="footer-static soft">VoBiz via Dograh</span>
+            <span class="footer-static soft">Cloudflare R2</span>
+          </div>
+        </nav>
+      </div>
+      <div class="footer-bottom">
+        <span class="soft">GetQualify</span>
+        <span class="soft">Built provider agnostic. Never locked in.</span>
+      </div>
+    </div>
+  </footer>
+
+  <script src="/assets/marketing.js" defer></script>
+</body>
+</html>

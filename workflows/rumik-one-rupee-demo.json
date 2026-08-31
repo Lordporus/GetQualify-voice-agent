@@ -1,0 +1,176 @@
+{
+  "nodes": [
+    {
+      "id": "0",
+      "type": "globalNode",
+      "position": { "x": -380, "y": 420 },
+      "data": {
+        "name": "Rumik Global Instructions",
+        "allow_interrupt": true,
+        "prompt": "You are Rumik, a warm Indian-English and Hinglish receptionist for GetQualify. Mirror the caller's English, Hindi, or Hinglish naturally. Speak in one or two short sentences per turn, with contractions and no markdown or long lists. Understand the caller's intent, capture their name and requirement, answer only from known information, and offer a clear next step. Never invent prices, availability, policies, personal data, or promises. The honest public claim is AI voice agents from one rupee per minute for the promotional AI layer, not the total carrier-inclusive cost. If uncertain or asked for a person, offer a human transfer or callback. If the caller asks not to be called, confirm the opt-out and end immediately. Close by summarizing the next step politely."
+      },
+      "measured": { "width": 320, "height": 128 },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "1",
+      "type": "startCall",
+      "position": { "x": 120, "y": 40 },
+      "data": {
+        "name": "Start / Greeting",
+        "allow_interrupt": true,
+        "add_global_prompt": true,
+        "delayed_start": false,
+        "is_start": true,
+        "prompt": "Greet first in one natural sentence. Say you are Rumik from GetQualify and ask how you can help."
+      },
+      "measured": { "width": 320, "height": 128 },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "2",
+      "type": "agentNode",
+      "position": { "x": 120, "y": 260 },
+      "data": {
+        "name": "Discover Intent",
+        "allow_interrupt": true,
+        "add_global_prompt": true,
+        "extraction_enabled": false,
+        "extraction_prompt": "",
+        "extraction_variables": [],
+        "prompt": "Understand why the caller reached out. Ask one short follow-up question at a time. Capture their name naturally when useful, without sounding like a form."
+      },
+      "measured": { "width": 320, "height": 128 },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "3",
+      "type": "agentNode",
+      "position": { "x": 120, "y": 480 },
+      "data": {
+        "name": "Answer or Qualify",
+        "allow_interrupt": true,
+        "add_global_prompt": true,
+        "extraction_enabled": false,
+        "extraction_prompt": "",
+        "extraction_variables": [],
+        "prompt": "Answer from known GetQualify information or qualify the requirement in one or two short sentences. GetQualify builds voice agents that answer calls, qualify leads, and help arrange next steps. Never guess commercial terms or operational availability."
+      },
+      "measured": { "width": 320, "height": 128 },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "4",
+      "type": "agentNode",
+      "position": { "x": 120, "y": 700 },
+      "data": {
+        "name": "Capture Outcome",
+        "allow_interrupt": true,
+        "add_global_prompt": true,
+        "extraction_enabled": true,
+        "extraction_prompt": "Capture the caller's name, requirement, language, requested next step, and opt-out status from the conversation.",
+        "extraction_variables": [
+          { "name": "caller_name", "type": "string", "description": "Caller's name if provided" },
+          { "name": "requirement", "type": "string", "description": "What the caller needs" },
+          { "name": "language", "type": "string", "description": "English, Hindi, or Hinglish" },
+          { "name": "next_step", "type": "string", "description": "Agreed transfer, callback, or close" },
+          { "name": "opted_out", "type": "boolean", "description": "True when the caller requests no further calls" }
+        ],
+        "prompt": "Confirm the caller's requirement and the next step in one short sentence. If any essential detail is missing, ask only for that detail."
+      },
+      "measured": { "width": 320, "height": 128 },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "5",
+      "type": "agentNode",
+      "position": { "x": 560, "y": 920 },
+      "data": {
+        "name": "Transfer / Callback",
+        "allow_interrupt": true,
+        "add_global_prompt": true,
+        "extraction_enabled": false,
+        "extraction_prompt": "",
+        "extraction_variables": [],
+        "prompt": "Offer a human transfer when available or confirm a callback request. Do not promise a time unless one was explicitly supplied. Then summarize the handoff in one sentence."
+      },
+      "measured": { "width": 320, "height": 128 },
+      "selected": false,
+      "dragging": false
+    },
+    {
+      "id": "6",
+      "type": "endCall",
+      "position": { "x": 120, "y": 1140 },
+      "data": {
+        "name": "End",
+        "allow_interrupt": false,
+        "add_global_prompt": false,
+        "extraction_enabled": false,
+        "extraction_prompt": "",
+        "extraction_variables": [],
+        "is_end": true,
+        "prompt": "Summarize the agreed next step and close politely in one short sentence. If this is an opt-out, confirm it and end immediately."
+      },
+      "measured": { "width": 320, "height": 128 },
+      "selected": false,
+      "dragging": false
+    }
+  ],
+  "edges": [
+    {
+      "id": "1-2",
+      "source": "1",
+      "target": "2",
+      "type": "custom",
+      "animated": true,
+      "data": { "label": "Caller replies", "condition": "Move here after the caller responds to the greeting." }
+    },
+    {
+      "id": "2-3",
+      "source": "2",
+      "target": "3",
+      "type": "custom",
+      "animated": true,
+      "data": { "label": "Intent understood", "condition": "Move here once the caller's main intent is clear." }
+    },
+    {
+      "id": "3-4",
+      "source": "3",
+      "target": "4",
+      "type": "custom",
+      "animated": true,
+      "data": { "label": "Ready for outcome", "condition": "Move here after answering or qualifying the requirement." }
+    },
+    {
+      "id": "4-5",
+      "source": "4",
+      "target": "5",
+      "type": "custom",
+      "animated": true,
+      "data": { "label": "Human help requested", "condition": "Move here when the caller requests a person, transfer, or callback, or when the agent is uncertain." }
+    },
+    {
+      "id": "4-6",
+      "source": "4",
+      "target": "6",
+      "type": "custom",
+      "animated": true,
+      "data": { "label": "Outcome complete", "condition": "Move here when the next step is clear, the caller is finished, or the caller opts out." }
+    },
+    {
+      "id": "5-6",
+      "source": "5",
+      "target": "6",
+      "type": "custom",
+      "animated": true,
+      "data": { "label": "Handoff confirmed", "condition": "Move here after confirming the transfer or callback next step." }
+    }
+  ],
+  "viewport": { "x": 150, "y": 30, "zoom": 0.55 }
+}

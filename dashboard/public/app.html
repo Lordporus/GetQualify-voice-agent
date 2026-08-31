@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>GetQualify Agency OS</title>
+<meta name="description" content="GetQualify Agency OS. Clients, revenue, invoices, integrations, and AI voice operations in one secure workspace." />
+<meta name="theme-color" content="#20201D" />
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/assets/brand.css?v=20260808-gold" />
+<link rel="stylesheet" href="/assets/app.css?v=20260811-agency1" />
+</head>
+<body class="grain">
+
+<!-- Background atmosphere (shared with marketing for one cohesive product) -->
+<div class="atmos" aria-hidden="true">
+  <span class="glow g1"></span><span class="glow g2"></span><span class="glow g3"></span>
+</div>
+
+<!-- No-JS notice. The console is an authenticated SPA and needs JavaScript. -->
+<noscript>
+  <div class="nojs">
+    <strong>JavaScript is required.</strong>
+    The GetQualify console is an interactive app. Please enable JavaScript to sign in and manage your agents.
+  </div>
+</noscript>
+
+<!-- App root. Everything below is rendered by app.js. The skeleton here keeps the
+     first paint premium even before scripts run. It is replaced on boot. -->
+<div id="app" class="app-root" aria-busy="true">
+  <div class="boot">
+    <div class="boot-mark" aria-hidden="true">
+      <svg viewBox="0 0 40 40" width="40" height="40">
+        <rect x="3" y="3" width="34" height="34" rx="11" fill="#20201D"/>
+        <path d="M27 15.2l-3.2 2.2c-1.1-1.6-2.5-2.4-4.3-2.4-3.1 0-5.3 2.3-5.3 5.8 0 3.6 2.1 5.9 5.3 5.9 2.2 0 3.7-1.1 4.2-2.8H19.5v-3.7H28v8.3h-3.4l-.4-1.8c-1.2 1.4-2.9 2.2-5 2.2-5.4 0-9.2-3.6-9.2-8.9 0-5.2 3.9-9 9.3-9 3.2 0 5.8 1.4 7.2 4.3Z" fill="#D2AE59"/>
+      </svg>
+    </div>
+    <div class="boot-text">Starting Agency OS<span class="spin boot-spin"></span></div>
+  </div>
+</div>
+
+<!-- Toast stack -->
+<div id="toasts" class="toasts" aria-live="polite" aria-atomic="false"></div>
+
+<!-- Modal host -->
+<div id="modal-host" class="modal-host hide" aria-hidden="true"></div>
+
+<script src="/assets/app.js?v=20260811-agency1" defer></script>
+</body>
+</html>

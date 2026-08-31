@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" fill="none" role="img" aria-label="GetQualify. Production AI voice agents at roughly one rupee.">
+  <title>GetQualify. Production AI voice agents at roughly one rupee.</title>
+  <defs>
+    <!-- userSpaceOnUse so thin vertical waveform lines also receive the gradient -->
+    <linearGradient id="ogVolt" x1="0" y1="0" x2="1200" y2="420" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34E7E4"/>
+      <stop offset="0.22" stop-color="#22D3EE"/>
+      <stop offset="0.60" stop-color="#6E7BFF"/>
+      <stop offset="1" stop-color="#A855F7"/>
+    </linearGradient>
+    <!-- compact gradient for the small lockup glyph (local coords, the group is translated) -->
+    <linearGradient id="ogOrb" x1="0" y1="0" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34E7E4"/>
+      <stop offset="0.5" stop-color="#6E7BFF"/>
+      <stop offset="1" stop-color="#A855F7"/>
+    </linearGradient>
+    <!-- gradient for the small "Voice" word in the lockup (local coords) -->
+    <linearGradient id="ogWord" x1="132" y1="0" x2="240" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34E7E4"/>
+      <stop offset="0.45" stop-color="#6E7BFF"/>
+      <stop offset="1" stop-color="#A855F7"/>
+    </linearGradient>
+    <radialGradient id="ogGlowTop" cx="0.5" cy="0" r="0.75">
+      <stop offset="0" stop-color="#6E7BFF" stop-opacity="0.40"/>
+      <stop offset="1" stop-color="#6E7BFF" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="ogGlowL" cx="0" cy="0.7" r="0.6">
+      <stop offset="0" stop-color="#34E7E4" stop-opacity="0.22"/>
+      <stop offset="1" stop-color="#34E7E4" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="ogGlowR" cx="1" cy="1" r="0.7">
+      <stop offset="0" stop-color="#A855F7" stop-opacity="0.26"/>
+      <stop offset="1" stop-color="#A855F7" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="ogGold" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#F5C97B"/>
+      <stop offset="1" stop-color="#C9933D"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Canvas and atmosphere -->
+  <rect width="1200" height="630" fill="#06070A"/>
+  <rect width="1200" height="630" fill="url(#ogGlowTop)"/>
+  <rect width="1200" height="630" fill="url(#ogGlowL)"/>
+  <rect width="1200" height="630" fill="url(#ogGlowR)"/>
+  <!-- hairline grid, masked to a soft top vignette -->
+  <g opacity="0.10" stroke="#FFFFFF" stroke-width="1">
+    <line x1="0" y1="105" x2="1200" y2="105"/>
+    <line x1="0" y1="210" x2="1200" y2="210"/>
+    <line x1="0" y1="315" x2="1200" y2="315"/>
+    <line x1="0" y1="420" x2="1200" y2="420"/>
+    <line x1="0" y1="525" x2="1200" y2="525"/>
+    <line x1="150" y1="0" x2="150" y2="630"/>
+    <line x1="300" y1="0" x2="300" y2="630"/>
+    <line x1="450" y1="0" x2="450" y2="630"/>
+    <line x1="600" y1="0" x2="600" y2="630"/>
+    <line x1="750" y1="0" x2="750" y2="630"/>
+    <line x1="900" y1="0" x2="900" y2="630"/>
+    <line x1="1050" y1="0" x2="1050" y2="630"/>
+  </g>
+  <rect width="1200" height="3" fill="url(#ogVolt)"/>
+
+  <!-- Brand lockup -->
+  <g transform="translate(90, 92)">
+    <circle cx="22" cy="22" r="21" fill="none" stroke="url(#ogOrb)" stroke-width="2" opacity="0.6"/>
+    <g stroke="url(#ogOrb)" stroke-width="3.4" stroke-linecap="round">
+      <line x1="13" y1="18" x2="13" y2="26"/>
+      <line x1="18" y1="15" x2="18" y2="29"/>
+      <line x1="23" y1="9"  x2="23" y2="35"/>
+      <line x1="28" y1="16" x2="28" y2="28"/>
+      <line x1="33" y1="13" x2="33" y2="31"/>
+    </g>
+    <text x="58" y="32" font-family="SF Pro Display, Inter, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+          font-size="30" font-weight="640" letter-spacing="-1" fill="#F4F6FB">Get <tspan fill="url(#ogWord)">Qualify</tspan></text>
+  </g>
+
+  <!-- Eyebrow -->
+  <text x="90" y="252" font-family="SF Pro Display, Inter, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="22" font-weight="600" letter-spacing="4" fill="#8A91A6">PROVIDER AGNOSTIC AI VOICE AGENTS</text>
+
+  <!-- Headline -->
+  <text x="88" y="338" font-family="SF Pro Display, Inter, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="76" font-weight="680" letter-spacing="-3" fill="#F4F6FB">Production voice agents</text>
+  <text x="88" y="424" font-family="SF Pro Display, Inter, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="76" font-weight="680" letter-spacing="-3" fill="#F4F6FB">at roughly <tspan fill="url(#ogGold)">one rupee</tspan>.</text>
+
+  <!-- Sub copy -->
+  <text x="90" y="486" font-family="SF Pro Display, Inter, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="27" font-weight="440" letter-spacing="-0.3" fill="#C2C8D6">Rumik silk TTS, about 20x cheaper than ElevenLabs. Swappable</text>
+  <text x="90" y="524" font-family="SF Pro Display, Inter, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif"
+        font-size="27" font-weight="440" letter-spacing="-0.3" fill="#C2C8D6">TTS, brain, and telephony. One folder, zero dependencies.</text>
+
+  <!-- Economics proof chips -->
+  <g transform="translate(90, 556)" font-family="SF Pro Display, Inter, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif">
+    <g>
+      <rect x="0" y="0" width="232" height="44" rx="22" fill="rgba(245,201,123,0.12)" stroke="#F5C97B" stroke-opacity="0.32"/>
+      <text x="20" y="29" font-size="20" font-weight="560" fill="#F5C97B">GetQualify  about Rs 1</text>
+    </g>
+    <g transform="translate(252, 0)">
+      <rect x="0" y="0" width="244" height="44" rx="22" fill="rgba(255,255,255,0.04)" stroke="#FFFFFF" stroke-opacity="0.12"/>
+      <text x="20" y="29" font-size="20" font-weight="500" fill="#8A91A6">ElevenLabs  about Rs 20</text>
+    </g>
+  </g>
+
+  <!-- Right side: voltage orb motif -->
+  <g transform="translate(945, 315)">
+    <circle r="168" fill="none" stroke="url(#ogVolt)" stroke-width="1.5" opacity="0.18"/>
+    <circle r="118" fill="none" stroke="url(#ogVolt)" stroke-width="1.5" opacity="0.30"/>
+    <circle r="70" fill="none" stroke="url(#ogVolt)" stroke-width="1.5" opacity="0.5"/>
+    <!-- waveform across the orb -->
+    <g stroke="url(#ogVolt)" stroke-width="7" stroke-linecap="round">
+      <line x1="-126" y1="-12" x2="-126" y2="12"/>
+      <line x1="-98"  y1="-26" x2="-98"  y2="26"/>
+      <line x1="-70"  y1="-58" x2="-70"  y2="58"/>
+      <line x1="-42"  y1="-34" x2="-42"  y2="34"/>
+      <line x1="-14"  y1="-78" x2="-14"  y2="78"/>
+      <line x1="14"   y1="-50" x2="14"   y2="50"/>
+      <line x1="42"   y1="-92" x2="42"   y2="92"/>
+      <line x1="70"   y1="-40" x2="70"   y2="40"/>
+      <line x1="98"   y1="-62" x2="98"   y2="62"/>
+      <line x1="126"  y1="-22" x2="126"  y2="22"/>
+    </g>
+  </g>
+</svg>

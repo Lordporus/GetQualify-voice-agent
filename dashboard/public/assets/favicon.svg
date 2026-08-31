@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64" fill="none" role="img" aria-label="GetQualify">
+  <title>GetQualify</title>
+  <defs>
+    <!-- userSpaceOnUse so the gradient paints reliably on thin vertical bars -->
+    <linearGradient id="favVolt" x1="14" y1="13" x2="51" y2="51" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#34E7E4"/>
+      <stop offset="0.22" stop-color="#22D3EE"/>
+      <stop offset="0.60" stop-color="#6E7BFF"/>
+      <stop offset="1" stop-color="#A855F7"/>
+    </linearGradient>
+  </defs>
+  <!-- Rounded ink tile -->
+  <rect x="0" y="0" width="64" height="64" rx="15" fill="#0E1018"/>
+  <rect x="0.75" y="0.75" width="62.5" height="62.5" rx="14.25" fill="none" stroke="url(#favVolt)" stroke-width="1.5" opacity="0.45"/>
+  <!-- Voltage waveform bars -->
+  <g stroke="url(#favVolt)" stroke-width="5" stroke-linecap="round">
+    <line x1="19" y1="26" x2="19" y2="38"/>
+    <line x1="28" y1="18" x2="28" y2="46"/>
+    <line x1="37" y1="13" x2="37" y2="51"/>
+    <line x1="46" y1="22" x2="46" y2="42"/>
+  </g>
+</svg>

@@ -1,0 +1,27 @@
+{
+  "name": "getqualify",
+  "version": "1.0.0",
+  "description": "GetQualify. A multi-tenant AI voice agent platform using Deepgram, Groq, Rumik, and VoBiz through Dograh. using Deepgram live transcription, Groq reasoning, Rumik streaming speech, and VoBiz through Dograh.",
+  "private": true,
+  "type": "commonjs",
+  "main": "server.js",
+  "scripts": {
+    "build": "node scripts/build-charts.cjs",
+    "start": "node server.js",
+    "setup": "sh setup.sh",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "react": "19.1.1",
+    "react-dom": "19.1.1",
+    "recharts": "3.1.2",
+    "ws": "8.21.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "esbuild": "0.25.9"
+  }
+}

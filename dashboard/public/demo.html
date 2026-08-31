@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="referrer" content="no-referrer" />
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; media-src 'self' blob:; connect-src 'self' https: wss:; object-src 'none'; base-uri 'none'; frame-ancestors 'self'" />
+<title>Voice agent demo</title>
+<meta name="description" content="Experience a live AI voice agent in your browser." />
+<link rel="icon" href="/assets/favicon.svg" type="image/svg+xml" />
+<link rel="stylesheet" href="/assets/demo.css?v=20260809-demo1" />
+</head>
+<body>
+<main class="demo-shell">
+  <header class="demo-brand" aria-live="polite">
+    <div class="brand-avatar" id="brandAvatar" aria-hidden="true">V</div>
+    <div><strong id="brandName">Voice demo</strong><span>Interactive agent experience</span></div>
+  </header>
+  <section class="demo-card" id="demoCard" aria-busy="true">
+    <div class="demo-loading" id="loadingState" role="status"><span></span>Preparing your demo</div>
+    <div class="demo-content" id="demoContent" hidden>
+      <div class="agent-label">Live voice agent</div>
+      <h1 id="agentName">Your voice agent</h1>
+      <p class="agent-greeting" id="agentGreeting">Start the call, then speak naturally.</p>
+      <div class="voice-stage" id="voiceStage" data-state="idle">
+        <div class="voice-orb" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></div>
+        <strong id="statusText" role="status">Ready to talk</strong>
+        <span id="statusDetail">Your microphone is used only while this demo is active.</span>
+        <span class="demo-timer" id="demoTimer" aria-live="polite"></span>
+      </div>
+      <button class="call-button" id="callButton" type="button" aria-label="Start voice call">Start voice call</button>
+      <audio id="remoteAudio" autoplay playsinline></audio>
+      <p class="privacy-note">Audio runs through the live voice workflow. This page does not expose account access or provider credentials.</p>
+    </div>
+    <div class="demo-error" id="errorState" role="alert" hidden>
+      <span class="error-mark" aria-hidden="true">!</span>
+      <h1 id="errorTitle">This demo is unavailable</h1>
+      <p id="errorCopy">Ask the sender for a new link.</p>
+      <button class="secondary-button" id="retryButton" type="button">Try again</button>
+    </div>
+  </section>
+  <footer>Powered by <strong>GetQualify</strong></footer>
+</main>
+<script src="/assets/demo.js?v=20260809-demo1" defer></script>
+</body>
+</html>

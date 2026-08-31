@@ -1,0 +1,21 @@
+# Secrets. Never commit real keys.
+.env
+
+# Runtime state (auto-created and seeded on first boot).
+data/
+!data/.gitkeep
+
+# Dependencies (there are none, but never sync these if they ever appear).
+node_modules
+node_modules.nosync
+
+# Legacy reference, kept local only.
+_legacy
+
+# Old flat-file agent store, superseded by data/db.json.
+agents.json
+
+# Logs and OS cruft.
+*.log
+.DS_Store
+public/samples/*.tmp
