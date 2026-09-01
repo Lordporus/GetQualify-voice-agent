@@ -8,6 +8,7 @@ CREATE TABLE tenants (
   plan TEXT DEFAULT 'studio',
   status TEXT DEFAULT 'active',
   privacy_mode TEXT DEFAULT 'standard',
+  last_approached_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -195,17 +196,26 @@ CREATE TABLE support_messages (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+DROP TABLE IF EXISTS demo_links;
+
 CREATE TABLE demo_links (
   id TEXT PRIMARY KEY,
+  token_hash TEXT UNIQUE NOT NULL,
   tenant_id TEXT REFERENCES tenants(id),
   agent_id TEXT REFERENCES agents(id),
-  preset_id TEXT,
-  name TEXT NOT NULL,
-  max_calls INTEGER DEFAULT 5,
-  calls_made INTEGER DEFAULT 0,
+  label TEXT NOT NULL,
+  status TEXT DEFAULT 'active',
+  starts INTEGER DEFAULT 0,
+  max_starts INTEGER DEFAULT 25,
+  max_session_seconds INTEGER DEFAULT 300,
   expires_at TIMESTAMPTZ,
+  revoked_at TIMESTAMPTZ,
+  revoked_by TEXT,
+  created_by TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE INDEX idx_demo_links_tenant ON demo_links(tenant_id);
 
 -- Indexes for multi-tenant queries
 CREATE INDEX idx_users_tenant ON users(tenant_id);
