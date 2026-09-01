@@ -1392,24 +1392,91 @@ async function apiAdminTenantCreate(req, res, ctx) {
   if (!name) return core.sendJson(res, 422, { error: 'client workspace name required', code: 'bad_tenant' });
   if (ownerEmail && (!EMAIL_RE.test(ownerEmail) || password.length < 12)) return core.sendJson(res, 422, { error: 'a valid owner email and 12 character temporary password are required together', code: 'bad_owner' });
   if (!ownerEmail && password) return core.sendJson(res, 422, { error: 'owner email is required when a password is supplied', code: 'bad_owner' });
-  if (ownerEmail && core.db().users.some((user) => user.email === ownerEmail)) return core.sendJson(res, 409, { error: 'owner email is already registered', code: 'email_taken' });
-  let tenant; let user = null;
-  await core.mutate((store) => {
-    const now = new Date().toISOString();
-    tenant = {
-      id: core.genId('t_'), name, slug: makeSlug(name, new Set(store.tenants.map((t) => t.slug))),
-      createdAt: now, branding: { color: '#B88A2D' }, providers: { ...DEFAULT_PROVIDERS },
-      plan: 'studio', status: ownerEmail ? 'active' : 'onboarding', privacyMode: 'standard',
-    };
-    store.tenants.push(tenant);
-    store.wallets.push({ id: core.genId('wal_'), tenantId: tenant.id, currency: 'INR', balancePaise: 0, createdAt: now, updatedAt: now });
-    if (ownerEmail) {
-      user = { id: core.genId('u_'), tenantId: tenant.id, email: ownerEmail, name: String(b.ownerName || 'Client Owner').trim().slice(0, 80), passHash: core.hashPassword(password), role: 'owner', status: 'active', createdAt: now };
-      store.users.push(user);
+  if (ownerEmail) {
+    if (db.isPostgres) {
+      const emailCheck = await db.query('SELECT 1 FROM users WHERE email = $1', [ownerEmail]);
+      if (emailCheck.rowCount > 0) return core.sendJson(res, 409, { error: 'owner email is already registered', code: 'email_taken' });
+    } else {
+      if (core.db().users.some((user) => user.email === ownerEmail)) return core.sendJson(res, 409, { error: 'owner email is already registered', code: 'email_taken' });
     }
-    store.clientActivities.push({ id: core.genId('act_'), tenantId: tenant.id, type: 'workspace_created', channel: 'internal', visibility: 'internal', summary: 'Client workspace created in Agency OS.', actorUserId: ctx.user.id, createdAt: now });
-    addAudit(store, ctx, 'admin.tenant.created', 'tenant', tenant.id, { ownerCreated: !!user });
-  });
+  }
+
+  let tenant; let user = null;
+  const now = new Date().toISOString();
+
+  if (db.isPostgres) {
+    await db.transaction(async (client) => {
+      const slugRows = await client.query('SELECT slug FROM tenants');
+      const taken = new Set(slugRows.rows.map((r) => r.slug));
+      const slug = makeSlug(name, taken);
+      const tenantId = core.genId('t_');
+
+      tenant = {
+        id: tenantId, name, slug,
+        createdAt: now, branding: { color: '#B88A2D' }, providers: { ...DEFAULT_PROVIDERS },
+        plan: 'studio', status: ownerEmail ? 'active' : 'onboarding', privacyMode: 'standard',
+      };
+
+      try {
+        await client.query(
+          `INSERT INTO tenants (id, name, slug, branding, providers, plan, status, privacy_mode, created_at)
+           VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+          [tenantId, name, slug, JSON.stringify(tenant.branding), JSON.stringify(tenant.providers), tenant.plan, tenant.status, tenant.privacyMode, now]
+        );
+      } catch (err) {
+        if (err.code === '23505') throw Object.assign(new Error('slug conflict on tenant insert'), { statusCode: 409, code: 'slug_conflict' });
+        throw err;
+      }
+
+      await client.query(
+        `INSERT INTO wallets (id, tenant_id, currency, balance_paise, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [core.genId('wal_'), tenantId, 'INR', 0, now, now]
+      );
+
+      if (ownerEmail) {
+        const userId = core.genId('u_');
+        const passHash = core.hashPassword(password);
+        const ownerName = String(b.ownerName || 'Client Owner').trim().slice(0, 80);
+        user = { id: userId, tenantId, email: ownerEmail, name: ownerName, passHash, role: 'owner', status: 'active', createdAt: now };
+        
+        try {
+          await client.query(
+            `INSERT INTO users (id, tenant_id, email, name, pass_hash, role, status, created_at)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+            [userId, tenantId, ownerEmail, ownerName, passHash, user.role, user.status, now]
+          );
+        } catch (err) {
+          if (err.code === '23505') throw Object.assign(new Error('owner email is already registered'), { statusCode: 409, code: 'email_taken' });
+          throw err;
+        }
+      }
+
+      await client.query(
+        `INSERT INTO client_activities (id, tenant_id, type, channel, visibility, summary, actor_user_id, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [core.genId('act_'), tenantId, 'workspace_created', 'internal', 'internal', 'Client workspace created in Agency OS.', ctx.user.id, now]
+      );
+
+      await db.addAuditSql(client, ctx, 'admin.tenant.created', 'tenant', tenantId, { ownerCreated: !!user });
+    });
+  } else {
+    await core.mutate((store) => {
+      tenant = {
+        id: core.genId('t_'), name, slug: makeSlug(name, new Set(store.tenants.map((t) => t.slug))),
+        createdAt: now, branding: { color: '#B88A2D' }, providers: { ...DEFAULT_PROVIDERS },
+        plan: 'studio', status: ownerEmail ? 'active' : 'onboarding', privacyMode: 'standard',
+      };
+      store.tenants.push(tenant);
+      store.wallets.push({ id: core.genId('wal_'), tenantId: tenant.id, currency: 'INR', balancePaise: 0, createdAt: now, updatedAt: now });
+      if (ownerEmail) {
+        user = { id: core.genId('u_'), tenantId: tenant.id, email: ownerEmail, name: String(b.ownerName || 'Client Owner').trim().slice(0, 80), passHash: core.hashPassword(password), role: 'owner', status: 'active', createdAt: now };
+        store.users.push(user);
+      }
+      store.clientActivities.push({ id: core.genId('act_'), tenantId: tenant.id, type: 'workspace_created', channel: 'internal', visibility: 'internal', summary: 'Client workspace created in Agency OS.', actorUserId: ctx.user.id, createdAt: now });
+      addAudit(store, ctx, 'admin.tenant.created', 'tenant', tenant.id, { ownerCreated: !!user });
+    });
+  }
   core.sendJson(res, 201, { tenant: publicTenant(tenant), owner: user ? publicUser(user) : null, note: 'No email was sent.' });
 }
 
