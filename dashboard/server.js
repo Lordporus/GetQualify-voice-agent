@@ -179,12 +179,14 @@ async function boot() {
     const userId = core.genId('u_');
     const nowIso = new Date().toISOString();
     const legacy = readLegacyAgents();
+    let finalSlug;
+    let finalPassHash;
 
     await core.mutate((d) => {
       d.tenants.push({
         id: tenantId,
         name: DEMO_TENANT,
-        slug: makeSlug(DEMO_TENANT, new Set(d.tenants.map((t) => t.slug))),
+        slug: finalSlug = makeSlug(DEMO_TENANT, new Set(d.tenants.map((t) => t.slug))),
         createdAt: nowIso,
         branding: { color: '#6E7BFF' },
         providers: { ...DEFAULT_PROVIDERS },
@@ -196,7 +198,7 @@ async function boot() {
         tenantId,
         email: DEMO_EMAIL,
         name: 'GetQualify Demo',
-        passHash: core.hashPassword(DEMO_PASS),
+        passHash: finalPassHash = core.hashPassword(DEMO_PASS),
         role: process.env.TEST_USER_SUPER_ADMIN === 'true' ? 'super_admin' : 'owner', status: 'active',
         createdAt: nowIso,
       });
@@ -205,6 +207,38 @@ async function boot() {
       // Migrate any legacy agents into the demo tenant.
       for (const la of legacy) d.agents.push(migrateLegacyAgent(la, tenantId));
     });
+
+    if (db.isPostgres) {
+      try {
+        await db.transaction(async (client) => {
+          try {
+            await client.query(
+              `INSERT INTO tenants (id, name, slug, branding, providers, plan, status, privacy_mode, created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+              [tenantId, DEMO_TENANT, finalSlug, JSON.stringify({ color: '#6E7BFF' }), JSON.stringify(DEFAULT_PROVIDERS), 'studio', 'active', 'standard', nowIso]
+            );
+          } catch (err) {
+            if (err.code === '23505') console.warn('boot: Postgres tenant slug conflict (will rollback and skip).');
+            throw err;
+          }
+
+          try {
+            await client.query(
+              `INSERT INTO users (id, tenant_id, email, name, pass_hash, role, status, created_at)
+               VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+              [userId, tenantId, DEMO_EMAIL, 'GetQualify Demo', finalPassHash, process.env.TEST_USER_SUPER_ADMIN === 'true' ? 'super_admin' : 'owner', 'active', nowIso]
+            );
+          } catch (err) {
+            if (err.code === '23505') console.warn('boot: Postgres user email conflict (will rollback and skip).');
+            throw err;
+          }
+
+          await db.addLedgerEntrySql(client, tenantId, TRIAL_CREDIT_PAISE, 'trial_grant', `trial:${tenantId}`, userId, { amountInr: 10, source: 'test_bootstrap' });
+        });
+      } catch (err) {
+        console.warn('boot: Skipping Postgres dual-write (JSON seed succeeded). Postgres Error:', err.message);
+      }
+    }
 
     console.log(`  Seeded env-configured test tenant "${DEMO_TENANT}" with ${legacy.length} migrated agent(s).`);
   }
@@ -390,14 +424,35 @@ async function apiSignup(req, res, body) {
 async function apiLogin(req, res, body) {
   const email = String(body.email || '').trim().toLowerCase();
   const password = String(body.password || '');
-  const d = core.db();
-  const user = d.users.find((u) => u.email === email);
+  
+  let user;
+  if (db.isPostgres) {
+    const userRes = await db.query('SELECT * FROM users WHERE email = $1', [email]);
+    user = userRes.rows[0];
+  } else {
+    const d = core.db();
+    user = d.users.find((u) => u.email === email);
+  }
+
   // Same generic error whether the user is missing or the password is wrong.
   if (!user || !core.verifyPassword(password, user.passHash)) {
+    console.error('DEBUG apiLogin: auth failed', { email, userExists: !!user, hasPassHash: user ? !!user.passHash : false });
     return core.sendJson(res, 401, { error: 'invalid email or password', code: 'bad_creds' });
   }
-  const tenant = d.tenants.find((t) => t.id === user.tenantId);
-  if (!tenant) return core.sendJson(res, 401, { error: 'invalid email or password', code: 'bad_creds' });
+
+  let tenant;
+  if (db.isPostgres) {
+    const tenantRes = await db.query('SELECT * FROM tenants WHERE id = $1', [user.tenantId]);
+    tenant = tenantRes.rows[0];
+  } else {
+    const d = core.db();
+    tenant = d.tenants.find((t) => t.id === user.tenantId);
+  }
+
+  if (!tenant) {
+    console.error('DEBUG apiLogin: tenant not found', { tenantId: user.tenantId });
+    return core.sendJson(res, 401, { error: 'invalid email or password', code: 'bad_creds' });
+  }
 
   const token = await core.createSession(user.id, user.tenantId);
   core.send(res, 200, JSON.stringify({ user: publicUser(user), tenant: publicTenant(tenant) }), {
