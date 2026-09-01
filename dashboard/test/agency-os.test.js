@@ -2,7 +2,7 @@
 
 const test = require('node:test');
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
+const { spawn, execSync } = require('node:child_process');
 const { mkdtemp, readFile, rm, stat } = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
@@ -53,6 +53,21 @@ function futureDate(days) {
 test('agency OS APIs complete the lifecycle and preserve tenant isolation', { timeout: 30000 }, async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'getqualify-agency-os-'));
   const dbFile = path.join(tempDir, 'db.json');
+  const rootDbUrl = process.env.TEST_ROOT_DATABASE_URL;
+  if (!rootDbUrl) {
+    throw new Error('TEST_ROOT_DATABASE_URL is required to run tests. Set it to a postgres url (e.g. postgresql://postgres:password@localhost:5432/postgres) with privileges to create databases.');
+  }
+
+  const testDbName = `gq_test_${Date.now()}`;
+  // Uses the standard URL parser to just swap the database path.
+  const testDbUrl = new URL(rootDbUrl);
+  testDbUrl.pathname = `/${testDbName}`;
+  const finalTestDbUrl = testDbUrl.toString();
+
+  // Provision disposable database
+  execSync(`psql "${rootDbUrl}" -c "CREATE DATABASE ${testDbName};"`, { stdio: 'ignore' });
+  execSync(`psql "${finalTestDbUrl}" -f "${path.join(DASHBOARD_DIR, '..', 'schema.sql')}"`, { stdio: 'ignore' });
+
   const port = await reservePort();
   const baseUrl = `http://127.0.0.1:${port}`;
   const logs = [];
@@ -62,6 +77,8 @@ test('agency OS APIs complete the lifecycle and preserve tenant isolation', { ti
       ...process.env,
       NODE_ENV: 'test',
       PORT: String(port),
+      DB_DRIVER: 'postgres',
+      DATABASE_URL: finalTestDbUrl,
       GETQUALIFY_DB_FILE: dbFile,
       TEST_USER_EMAIL: ADMIN_EMAIL,
       TEST_USER_PASSWORD: ADMIN_PASSWORD,
@@ -83,6 +100,8 @@ test('agency OS APIs complete the lifecycle and preserve tenant isolation', { ti
       ]);
     }
     await rm(tempDir, { recursive: true, force: true });
+    // Guaranteed to run even if the test fails midway.
+    execSync(`psql "${rootDbUrl}" -c "DROP DATABASE ${testDbName} WITH (FORCE);"`, { stdio: 'ignore' });
   });
 
   await waitForServer(baseUrl, child, () => logs.join(''));

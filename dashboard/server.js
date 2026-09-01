@@ -24,6 +24,7 @@ core.loadEnv();
 const providers = require('./lib/providers');
 const payu = require('./lib/payu');
 const demoLinks = require('./lib/demo-links');
+const db = require('./lib/db');
 
 const PORT = parseInt(process.env.PORT || '8787', 10);
 const DEFAULT_PROVIDERS = Object.freeze({
@@ -312,35 +313,73 @@ async function apiSignup(req, res, body) {
 
   if (!EMAIL_RE.test(email)) return core.sendJson(res, 422, { error: 'valid email required', code: 'bad_email' });
   if (password.length < 12) return core.sendJson(res, 422, { error: 'password must be at least 12 characters', code: 'weak_password' });
-  if (core.db().users.some((u) => u.email === email)) {
+
+  // Email uniqueness check via SQL (replaces core.db().users.some()).
+  const emailCheck = await db.query('SELECT 1 FROM users WHERE email = $1', [email]);
+  if (emailCheck.rowCount > 0) {
     return core.sendJson(res, 409, { error: 'an account with this email already exists', code: 'email_taken' });
   }
 
   const tenantId = core.genId('t_');
-  const userId = core.genId('u_');
-  const nowIso = new Date().toISOString();
+  const userId   = core.genId('u_');
+  const passHash = core.hashPassword(password);
+  const nowIso   = new Date().toISOString();
   let tenant; let user;
 
-  await core.mutate((d) => {
-    const taken = new Set(d.tenants.map((t) => t.slug));
+  await db.transaction(async (client) => {
+    // Read existing slugs to generate a unique one inside the transaction.
+    const slugRows = await client.query('SELECT slug FROM tenants');
+    const taken    = new Set(slugRows.rows.map((r) => r.slug));
+    const slug     = makeSlug(company, taken);
+
     tenant = {
-      id: tenantId, name: company, slug: makeSlug(company, taken), createdAt: nowIso,
+      id: tenantId, name: company, slug, createdAt: nowIso,
       branding: { color: '#6E7BFF' },
       providers: { ...DEFAULT_PROVIDERS },
-      plan: 'studio',
-      status: 'active', privacyMode: 'standard',
+      plan: 'studio', status: 'active', privacyMode: 'standard',
     };
     user = {
       id: userId, tenantId, email, name,
-      passHash: core.hashPassword(password), role: 'owner', status: 'active', createdAt: nowIso,
+      passHash, role: 'owner', status: 'active', createdAt: nowIso,
     };
-    d.tenants.push(tenant);
-    d.users.push(user);
-    d.wallets.push({ id: core.genId('wal_'), tenantId, currency: 'INR', balancePaise: 0, createdAt: nowIso, updatedAt: nowIso });
-    addLedgerEntry(d, tenantId, TRIAL_CREDIT_PAISE, 'trial_grant', `trial:${tenantId}`, userId, { amountInr: 10 });
-    addAudit(d, { tenant, user }, 'auth.signup', 'tenant', tenantId);
+
+    try {
+      await client.query(
+        `INSERT INTO tenants (id, name, slug, branding, providers, plan, status, privacy_mode, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [tenantId, company, slug, JSON.stringify(tenant.branding), JSON.stringify(tenant.providers),
+         'studio', 'active', 'standard', nowIso]
+      );
+    } catch (err) {
+      if (err.code === '23505') {
+        // TODO: retry with a suffixed slug (e.g. slug-2, slug-3) instead of failing.
+        throw Object.assign(new Error('slug conflict on tenant insert'), { statusCode: 409, code: 'slug_conflict' });
+      }
+      throw err;
+    }
+
+    try {
+      await client.query(
+        `INSERT INTO users (id, tenant_id, email, name, pass_hash, role, status, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [userId, tenantId, email, name, passHash, 'owner', 'active', nowIso]
+      );
+    } catch (err) {
+      if (err.code === '23505') {
+        // Race: another signup with the same email committed between our check and this insert.
+        throw Object.assign(new Error('email already registered'), { statusCode: 409, code: 'email_taken' });
+      }
+      throw err;
+    }
+
+    // addLedgerEntrySql creates the wallet row when none exists yet.
+    await db.addLedgerEntrySql(client, tenantId, TRIAL_CREDIT_PAISE, 'trial_grant',
+      `trial:${tenantId}`, userId, { amountInr: 10 });
+
+    await db.addAuditSql(client, { tenant, user }, 'auth.signup', 'tenant', tenantId);
   });
 
+  // Session creation stays on core.js path (not migrated in this group).
   const token = await core.createSession(userId, tenantId);
   core.send(res, 200, JSON.stringify({ user: publicUser(user), tenant: publicTenant(tenant) }), {
     'Content-Type': 'application/json',
