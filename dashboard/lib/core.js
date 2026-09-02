@@ -22,6 +22,7 @@ const https = require('https');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const pgDb = require('./db.js');
 
 // Project root is one level up from lib/.
 const ROOT = path.join(__dirname, '..');
@@ -293,11 +294,20 @@ async function createSession(userId, tenantId) {
   const token = crypto.randomBytes(32).toString('hex');
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   const exp = Date.now() + SESSION_TTL_MS;
-  await mutate((d) => {
-    // Prune any already-expired sessions while we are here (cheap housekeeping).
-    d.sessions = d.sessions.filter((s) => s.exp > Date.now());
-    d.sessions.push({ tokenHash, userId, tenantId, exp });
-  });
+  
+  if (pgDb.isPostgres) {
+    await pgDb.query('DELETE FROM sessions WHERE exp <= $1', [Date.now()]);
+    await pgDb.query(
+      'INSERT INTO sessions (token_hash, user_id, tenant_id, exp) VALUES ($1, $2, $3, $4)',
+      [tokenHash, userId, tenantId, exp]
+    );
+  } else {
+    await mutate((d) => {
+      // Prune any already-expired sessions while we are here (cheap housekeeping).
+      d.sessions = d.sessions.filter((s) => s.exp > Date.now());
+      d.sessions.push({ tokenHash, userId, tenantId, exp });
+    });
+  }
   return token;
 }
 
@@ -307,10 +317,20 @@ async function createImpersonationSession(actorUserId, targetUserId, targetTenan
   const token = crypto.randomBytes(32).toString('hex');
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
   const exp = Date.now() + IMPERSONATION_TTL_MS;
-  await mutate((d) => {
-    d.sessions = d.sessions.filter((s) => s.exp > Date.now());
-    d.sessions.push({ tokenHash, userId: targetUserId, tenantId: targetTenantId, exp, impersonatorUserId: actorUserId, impersonationReason: String(reason || '').slice(0, 240) });
-  });
+  const reasonStr = String(reason || '').slice(0, 240);
+  
+  if (pgDb.isPostgres) {
+    await pgDb.query('DELETE FROM sessions WHERE exp <= $1', [Date.now()]);
+    await pgDb.query(
+      'INSERT INTO sessions (token_hash, user_id, tenant_id, exp, impersonator_user_id, impersonation_reason) VALUES ($1, $2, $3, $4, $5, $6)',
+      [tokenHash, targetUserId, targetTenantId, exp, actorUserId, reasonStr]
+    );
+  } else {
+    await mutate((d) => {
+      d.sessions = d.sessions.filter((s) => s.exp > Date.now());
+      d.sessions.push({ tokenHash, userId: targetUserId, tenantId: targetTenantId, exp, impersonatorUserId: actorUserId, impersonationReason: reasonStr });
+    });
+  }
   return token;
 }
 
@@ -348,23 +368,58 @@ function parseCookieToken(req) {
 async function getSession(req) {
   const token = parseCookieToken(req);
   if (!token || token.length < 16) return null;
-  const d = db();
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-  const session = d.sessions.find((s) => s.tokenHash === tokenHash || s.token === token);
+  
+  let session = null;
+  if (pgDb.isPostgres) {
+    const res = await pgDb.query('SELECT * FROM sessions WHERE token_hash = $1', [tokenHash]);
+    if (res.rowCount === 0) return null;
+    session = res.rows[0];
+  } else {
+    const d = db();
+    session = d.sessions.find((s) => s.tokenHash === tokenHash || s.token === token);
+  }
+  
   if (!session) return null;
-  if (session.exp <= Date.now()) {
+  
+  if (Number(session.exp) <= Date.now()) {
     // Expired: drop it so the next request is clean.
-    await mutate((dd) => {
-      dd.sessions = dd.sessions.filter((s) => s.token !== token && s.tokenHash !== tokenHash);
-    });
+    if (pgDb.isPostgres) {
+      await pgDb.query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash]);
+    } else {
+      await mutate((dd) => {
+        dd.sessions = dd.sessions.filter((s) => s.token !== token && s.tokenHash !== tokenHash);
+      });
+    }
     return null;
   }
-  const user = d.users.find((u) => u.id === session.userId);
-  const tenant = d.tenants.find((t) => t.id === session.tenantId);
-  if (!user || !tenant || user.status !== 'active' || tenant.status !== 'active') return null;
-  const impersonator = session.impersonatorUserId ? d.users.find((u) => u.id === session.impersonatorUserId && u.status === 'active') : null;
-  if (session.impersonatorUserId && (!impersonator || impersonator.role !== 'super_admin')) return null;
-  return { session, user, tenant, impersonator };
+  
+  if (pgDb.isPostgres) {
+    const userRes = await pgDb.query('SELECT * FROM users WHERE id = $1 AND status = $2', [session.userId, 'active']);
+    const tenantRes = await pgDb.query('SELECT * FROM tenants WHERE id = $1 AND status = $2', [session.tenantId, 'active']);
+    if (userRes.rowCount === 0 || tenantRes.rowCount === 0) return null;
+    const user = userRes.rows[0];
+    const tenant = tenantRes.rows[0];
+    
+    let impersonator = null;
+    if (session.impersonatorUserId) {
+      const impRes = await pgDb.query('SELECT * FROM users WHERE id = $1 AND status = $2', [session.impersonatorUserId, 'active']);
+      if (impRes.rowCount > 0 && impRes.rows[0].role === 'super_admin') {
+        impersonator = impRes.rows[0];
+      } else {
+        return null;
+      }
+    }
+    return { session, user, tenant, impersonator };
+  } else {
+    const d = db();
+    const user = d.users.find((u) => u.id === session.userId);
+    const tenant = d.tenants.find((t) => t.id === session.tenantId);
+    if (!user || !tenant || user.status !== 'active' || tenant.status !== 'active') return null;
+    const impersonator = session.impersonatorUserId ? d.users.find((u) => u.id === session.impersonatorUserId && u.status === 'active') : null;
+    if (session.impersonatorUserId && (!impersonator || impersonator.role !== 'super_admin')) return null;
+    return { session, user, tenant, impersonator };
+  }
 }
 
 // Remove a session by token (logout).
@@ -372,7 +427,11 @@ async function destroySession(req) {
   const token = parseCookieToken(req);
   if (!token) return;
   const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
-  await mutate((d) => { d.sessions = d.sessions.filter((s) => s.token !== token && s.tokenHash !== tokenHash); });
+  if (pgDb.isPostgres) {
+    await pgDb.query('DELETE FROM sessions WHERE token_hash = $1', [tokenHash]);
+  } else {
+    await mutate((d) => { d.sessions = d.sessions.filter((s) => s.token !== token && s.tokenHash !== tokenHash); });
+  }
 }
 
 const ROLE_LEVEL = { member: 1, owner: 2, admin: 3, super_admin: 4 };

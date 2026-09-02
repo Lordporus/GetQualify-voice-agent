@@ -12,3 +12,11 @@ node_modules/
 # overlay source in rumik-overlay-local/ remains intentionally trackable.
 dograh-official/
 local-dograh/
+scratch/
+# Add these lines to .gitignore if missing:
+data/db.json
+data/*.json
+.env
+scratch/
+node_modules/
+.planning/

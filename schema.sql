@@ -14,7 +14,7 @@ CREATE TABLE tenants (
 
 CREATE TABLE users (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id),
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   email TEXT UNIQUE NOT NULL,
   name TEXT,
   pass_hash TEXT NOT NULL,
@@ -25,7 +25,7 @@ CREATE TABLE users (
 
 CREATE TABLE agents (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id),
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   persona TEXT,
   tts JSONB DEFAULT '{}',
@@ -37,8 +37,8 @@ CREATE TABLE agents (
 
 CREATE TABLE calls (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id),
-  agent_id TEXT REFERENCES agents(id),
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
   recording_url TEXT,
   transcript TEXT,
   duration_seconds INTEGER DEFAULT 0,
@@ -50,7 +50,7 @@ CREATE TABLE calls (
 
 CREATE TABLE usage (
   id SERIAL PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id),
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   day DATE NOT NULL,
   chars INTEGER DEFAULT 0,
   calls INTEGER DEFAULT 0,
@@ -60,8 +60,8 @@ CREATE TABLE usage (
 
 CREATE TABLE sessions (
   token_hash TEXT PRIMARY KEY,
-  user_id TEXT REFERENCES users(id),
-  tenant_id TEXT REFERENCES tenants(id),
+  user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   exp BIGINT NOT NULL,
   impersonator_user_id TEXT,
   impersonation_reason TEXT
@@ -69,7 +69,7 @@ CREATE TABLE sessions (
 
 CREATE TABLE wallets (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT UNIQUE REFERENCES tenants(id),
+  tenant_id TEXT UNIQUE REFERENCES tenants(id) ON DELETE CASCADE,
   currency TEXT DEFAULT 'INR',
   balance_paise INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -78,7 +78,7 @@ CREATE TABLE wallets (
 
 CREATE TABLE ledger (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id),
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   type TEXT NOT NULL,
   amount_paise INTEGER NOT NULL,
   balance_after_paise INTEGER NOT NULL,
@@ -90,7 +90,7 @@ CREATE TABLE ledger (
 
 CREATE TABLE invoices (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id),
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   invoice_number TEXT UNIQUE,
   client_name TEXT,
   client_email TEXT,
@@ -108,7 +108,7 @@ CREATE TABLE invoices (
 
 CREATE TABLE audit_events (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id),
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   actor_user_id TEXT,
   subject_user_id TEXT,
   action TEXT NOT NULL,
@@ -120,7 +120,7 @@ CREATE TABLE audit_events (
 
 -- Client settings and notifications (Phase 1 Additions)
 CREATE TABLE client_settings (
-  tenant_id TEXT PRIMARY KEY REFERENCES tenants(id),
+  tenant_id TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
   industry TEXT,
   timezone TEXT DEFAULT 'Asia/Kolkata',
   business_hours JSONB DEFAULT '{}',
@@ -133,7 +133,7 @@ CREATE TABLE client_settings (
 
 CREATE TABLE notifications (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id),
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   type TEXT NOT NULL,
   recipient_email TEXT,
   subject TEXT,
@@ -144,8 +144,8 @@ CREATE TABLE notifications (
 
 CREATE TABLE call_recordings (
   id TEXT PRIMARY KEY,
-  call_id TEXT REFERENCES calls(id),
-  tenant_id TEXT REFERENCES tenants(id),
+  call_id TEXT REFERENCES calls(id) ON DELETE CASCADE,
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   s3_key TEXT NOT NULL,
   duration_seconds INTEGER,
   size_bytes BIGINT,
@@ -155,7 +155,7 @@ CREATE TABLE call_recordings (
 -- Extra tables needed based on legacy JSON schema
 CREATE TABLE payment_intents (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id),
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   amount_paise INTEGER NOT NULL,
   currency TEXT DEFAULT 'INR',
   pack_id TEXT,
@@ -167,7 +167,7 @@ CREATE TABLE payment_intents (
 CREATE TABLE payment_events (
   id TEXT PRIMARY KEY,
   provider TEXT,
-  tenant_id TEXT REFERENCES tenants(id),
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   payment_intent_id TEXT,
   txnid TEXT,
   status TEXT,
@@ -178,7 +178,7 @@ CREATE TABLE payment_events (
 
 CREATE TABLE support_tickets (
   id TEXT PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id),
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   subject TEXT NOT NULL,
   status TEXT DEFAULT 'open',
   priority TEXT DEFAULT 'normal',
@@ -190,7 +190,7 @@ CREATE TABLE support_tickets (
 
 CREATE TABLE support_messages (
   id TEXT PRIMARY KEY,
-  ticket_id TEXT REFERENCES support_tickets(id),
+  ticket_id TEXT REFERENCES support_tickets(id) ON DELETE CASCADE,
   user_id TEXT,
   body TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -201,8 +201,8 @@ DROP TABLE IF EXISTS demo_links;
 CREATE TABLE demo_links (
   id TEXT PRIMARY KEY,
   token_hash TEXT UNIQUE NOT NULL,
-  tenant_id TEXT REFERENCES tenants(id),
-  agent_id TEXT REFERENCES agents(id),
+  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  agent_id TEXT REFERENCES agents(id) ON DELETE CASCADE,
   label TEXT NOT NULL,
   status TEXT DEFAULT 'active',
   starts INTEGER DEFAULT 0,
@@ -223,9 +223,18 @@ CREATE INDEX idx_agents_tenant ON agents(tenant_id);
 CREATE INDEX idx_calls_tenant ON calls(tenant_id);
 CREATE INDEX idx_usage_tenant_day ON usage(tenant_id, day);
 CREATE INDEX idx_sessions_exp ON sessions(exp);
+CREATE INDEX idx_sessions_tenant ON sessions(tenant_id);
+CREATE INDEX idx_sessions_user ON sessions(user_id);
 CREATE INDEX idx_invoices_tenant ON invoices(tenant_id);
 CREATE INDEX idx_audit_tenant ON audit_events(tenant_id);
 CREATE INDEX idx_ledger_tenant ON ledger(tenant_id);
+CREATE INDEX idx_notifications_tenant ON notifications(tenant_id);
+CREATE INDEX idx_call_recordings_tenant ON call_recordings(tenant_id);
+CREATE INDEX idx_call_recordings_call ON call_recordings(call_id);
+CREATE INDEX idx_payment_intents_tenant ON payment_intents(tenant_id);
+CREATE INDEX idx_payment_events_tenant ON payment_events(tenant_id);
+CREATE INDEX idx_support_tickets_tenant ON support_tickets(tenant_id);
+CREATE INDEX idx_support_messages_ticket ON support_messages(ticket_id);
 
 -- =============================================================================
 -- Extended tables (approved 2026-09-01): presets, byon_connections, hvac_jobs,
@@ -235,7 +244,7 @@ CREATE INDEX idx_ledger_tenant ON ledger(tenant_id);
 
 CREATE TABLE presets (
   id          TEXT PRIMARY KEY,
-  tenant_id   TEXT REFERENCES tenants(id),
+  tenant_id   TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   slug        TEXT,
   name        TEXT NOT NULL,
   category    TEXT,
@@ -251,7 +260,7 @@ CREATE INDEX idx_presets_tenant ON presets(tenant_id);
 
 CREATE TABLE byon_connections (
   id          TEXT PRIMARY KEY,
-  tenant_id   TEXT REFERENCES tenants(id),
+  tenant_id   TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   provider    TEXT NOT NULL,
   address     TEXT NOT NULL,
   label       TEXT,
@@ -264,7 +273,7 @@ CREATE INDEX idx_byon_tenant ON byon_connections(tenant_id);
 
 CREATE TABLE hvac_jobs (
   id           TEXT PRIMARY KEY,
-  tenant_id    TEXT REFERENCES tenants(id),
+  tenant_id    TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   caller_name  TEXT,
   phone        TEXT,
   email        TEXT,
@@ -280,15 +289,15 @@ CREATE TABLE hvac_jobs (
 CREATE INDEX idx_hvac_jobs_tenant ON hvac_jobs(tenant_id);
 
 CREATE TABLE hvac_settings (
-  tenant_id  TEXT PRIMARY KEY REFERENCES tenants(id),
+  tenant_id  TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
   settings   JSONB DEFAULT '{}',
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE TABLE invoice_events (
   id            TEXT PRIMARY KEY,
-  tenant_id     TEXT REFERENCES tenants(id),
-  invoice_id    TEXT REFERENCES invoices(id),
+  tenant_id     TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  invoice_id    TEXT REFERENCES invoices(id) ON DELETE CASCADE,
   type          TEXT NOT NULL,
   actor_user_id TEXT,
   created_at    TIMESTAMPTZ DEFAULT NOW()
@@ -298,7 +307,7 @@ CREATE INDEX idx_invoice_events_invoice ON invoice_events(invoice_id);
 
 CREATE TABLE integration_requests (
   id             TEXT PRIMARY KEY,
-  tenant_id      TEXT REFERENCES tenants(id),
+  tenant_id      TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   integration_id TEXT NOT NULL,
   status         TEXT DEFAULT 'requested',
   created_by     TEXT,
@@ -307,7 +316,7 @@ CREATE TABLE integration_requests (
 CREATE INDEX idx_integration_requests_tenant ON integration_requests(tenant_id);
 
 CREATE TABLE agency_prompts (
-  tenant_id  TEXT PRIMARY KEY REFERENCES tenants(id),
+  tenant_id  TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
   text       TEXT NOT NULL,
   version    INTEGER DEFAULT 1,
   updated_by TEXT,
@@ -316,7 +325,7 @@ CREATE TABLE agency_prompts (
 
 CREATE TABLE tenant_status_events (
   id            TEXT PRIMARY KEY,
-  tenant_id     TEXT REFERENCES tenants(id),
+  tenant_id     TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   from_status   TEXT,
   to_status     TEXT NOT NULL,
   reason        TEXT,
@@ -327,7 +336,7 @@ CREATE INDEX idx_tenant_status_events_tenant ON tenant_status_events(tenant_id);
 
 CREATE TABLE client_activities (
   id            TEXT PRIMARY KEY,
-  tenant_id     TEXT REFERENCES tenants(id),
+  tenant_id     TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   type          TEXT NOT NULL,
   channel       TEXT,
   visibility    TEXT DEFAULT 'internal',

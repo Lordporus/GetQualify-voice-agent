@@ -172,6 +172,17 @@ async function boot() {
     }
   });
 
+  if (db.isPostgres) {
+    for (const preset of PRESET_LIBRARY) {
+      await db.query(
+        `INSERT INTO presets (id, slug, name, category, version, is_system, greeting, persona, fields, guardrails, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+         ON CONFLICT (id) DO NOTHING`,
+        [preset.id, preset.slug, preset.name, preset.category, preset.version || 1, true, preset.greeting, preset.persona || null, JSON.stringify(preset.fields || []), JSON.stringify(preset.guardrails || [])]
+      ).catch(() => {});
+    }
+  }
+
   const hasDemo = DEMO_EMAIL && existing.users.some((u) => u.email === DEMO_EMAIL);
 
   if (DEMO_EMAIL && DEMO_PASS.length >= 12 && !hasDemo) {
@@ -295,6 +306,18 @@ function makeSlug(name, taken) {
 // Bump a usage counter for today for a tenant. field in {chars, calls, llmTokens}.
 async function bumpUsage(tenantId, field, amount) {
   const day = todayUtc();
+  if (db.isPostgres) {
+    const col = field === 'llmTokens' ? 'llm_tokens' : field;
+    if (!['chars', 'calls', 'llm_tokens'].includes(col)) return;
+    await db.query(
+      `INSERT INTO usage (tenant_id, day, chars, calls, llm_tokens)
+       VALUES ($1, $2, $3, $4, $5)
+       ON CONFLICT (tenant_id, day)
+       DO UPDATE SET ${col} = usage.${col} + EXCLUDED.${col}`,
+      [tenantId, day, col === 'chars' ? amount : 0, col === 'calls' ? amount : 0, col === 'llm_tokens' ? amount : 0]
+    ).catch((err) => console.error('bumpUsage Postgres error:', err));
+    return;
+  }
   await core.mutate((d) => {
     let row = d.usage.find((r) => r.tenantId === tenantId && r.day === day);
     if (!row) { row = { tenantId, day, chars: 0, calls: 0, llmTokens: 0 }; d.usage.push(row); }
@@ -500,8 +523,30 @@ function calRequest(method, pathname, version, payload) {
   });
 }
 function tenantHvacJobs(tenantId) { return core.db().hvacJobs.filter((job) => job.tenantId === tenantId); }
-function publicHvacJob(job) { return { id: job.id, callerName: job.callerName, phone: job.phone, email: job.email || '', service: job.service, urgency: job.urgency, outcome: job.outcome, assignedTo: job.assignedTo || '', notes: job.notes || '', appointment: job.appointment || null, createdAt: job.createdAt, updatedAt: job.updatedAt }; }
-function apiHvacDesk(req, res, ctx) {
+function publicHvacJob(job) {
+  return {
+    id: job.id,
+    callerName: job.callerName || job.caller_name || '',
+    phone: job.phone,
+    email: job.email || '',
+    service: job.service,
+    urgency: job.urgency,
+    outcome: job.outcome,
+    assignedTo: job.assignedTo || job.assigned_to || '',
+    notes: job.notes || '',
+    appointment: job.appointment || null,
+    createdAt: toIso(job.createdAt || job.created_at),
+    updatedAt: toIso(job.updatedAt || job.updated_at),
+  };
+}
+
+async function apiHvacDesk(req, res, ctx) {
+  if (db.isPostgres) {
+    const { rows } = await db.query('SELECT * FROM hvac_jobs WHERE tenant_id = $1 ORDER BY updated_at DESC', [ctx.tenant.id]);
+    const jobs = rows.map(publicHvacJob);
+    const count = (outcome) => jobs.filter((job) => job.outcome === outcome).length;
+    return core.sendJson(res, 200, { timezone: HVAC_TIMEZONE, calendarConfigured: Boolean(process.env.CALCOM_API_KEY), jobs, stats: { calls: jobs.length, booked: count('booked'), routed: count('routed'), followUp: count('follow_up') } });
+  }
   const jobs = tenantHvacJobs(ctx.tenant.id).sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
   const count = (outcome) => jobs.filter((job) => job.outcome === outcome).length;
   core.sendJson(res, 200, { timezone: HVAC_TIMEZONE, calendarConfigured: Boolean(process.env.CALCOM_API_KEY), jobs: jobs.map(publicHvacJob), stats: { calls: jobs.length, booked: count('booked'), routed: count('routed'), followUp: count('follow_up') } });
@@ -522,6 +567,41 @@ async function apiHvacJobSave(req, res, ctx) {
   const b = ctx.body || {}; const callerName = String(b.callerName || '').trim().slice(0, 100); const phone = String(b.phone || '').trim().slice(0, 32);
   if (!callerName || !phone) return core.sendJson(res, 422, { error: 'caller name and phone are required', code: 'missing_contact' });
   const outcome = HVAC_OUTCOMES.has(b.outcome) ? b.outcome : 'new'; const now = new Date().toISOString(); let job;
+
+  if (db.isPostgres) {
+    const jobId = b.id ? String(b.id) : core.genId('hvac_');
+    const existing = b.id ? await db.query('SELECT * FROM hvac_jobs WHERE id = $1 AND tenant_id = $2', [jobId, ctx.tenant.id]) : { rowCount: 0 };
+    const email = String(b.email || '').trim().slice(0, 180);
+    const service = String(b.service || 'General HVAC').trim().slice(0, 80);
+    const urgency = String(b.urgency || 'normal').trim().slice(0, 30);
+    const assignedTo = String(b.assignedTo || '').trim().slice(0, 80);
+    const notes = String(b.notes || '').trim().slice(0, 2000);
+
+    await db.transaction(async (client) => {
+      if (existing.rowCount > 0) {
+        const uRes = await client.query(
+          `UPDATE hvac_jobs
+           SET caller_name = $1, phone = $2, email = $3, service = $4, urgency = $5, outcome = $6, assigned_to = $7, notes = $8, updated_at = $9
+           WHERE id = $10 AND tenant_id = $11
+           RETURNING *`,
+          [callerName, phone, email, service, urgency, outcome, assignedTo, notes, now, jobId, ctx.tenant.id]
+        );
+        job = uRes.rows[0];
+      } else {
+        const iRes = await client.query(
+          `INSERT INTO hvac_jobs (id, tenant_id, caller_name, phone, email, service, urgency, outcome, assigned_to, notes, appointment, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+           RETURNING *`,
+          [jobId, ctx.tenant.id, callerName, phone, email, service, urgency, outcome, assignedTo, notes, null, now, now]
+        );
+        job = iRes.rows[0];
+      }
+      await db.addAuditSql(client, ctx, 'hvac.job.saved', 'hvac_job', job.id, { outcome: job.outcome });
+    });
+
+    return core.sendJson(res, 200, { job: publicHvacJob(job) });
+  }
+
   await core.mutate((d) => {
     job = b.id ? d.hvacJobs.find((item) => item.id === String(b.id) && item.tenantId === ctx.tenant.id) : null;
     if (!job) { job = { id: core.genId('hvac_'), tenantId: ctx.tenant.id, createdAt: now, appointment: null }; d.hvacJobs.push(job); }
@@ -538,17 +618,51 @@ async function apiHvacBook(req, res, ctx) {
   try {
     const booking = await calRequest('POST', '/v2/bookings', '2026-02-25', { eventTypeId, start: new Date(start).toISOString(), attendee: { name, email, phoneNumber: phone, timeZone: HVAC_TIMEZONE, language: 'en' }, metadata: { source: 'rumik_hvac_desk', service: String(b.service || 'General HVAC').slice(0, 80), urgency: String(b.urgency || 'normal').slice(0, 30), jobId: String(b.jobId || '') } });
     const now = new Date().toISOString(); let job;
+    const appointment = { calBookingUid: booking.data && booking.data.uid, eventTypeId, start: booking.data && booking.data.start, end: booking.data && booking.data.end, status: booking.data && booking.data.status, timezone: HVAC_TIMEZONE };
+
+    if (db.isPostgres) {
+      const jobId = b.jobId ? String(b.jobId) : core.genId('hvac_');
+      const existing = b.jobId ? await db.query('SELECT * FROM hvac_jobs WHERE id = $1 AND tenant_id = $2', [jobId, ctx.tenant.id]) : { rowCount: 0 };
+      await db.transaction(async (client) => {
+        if (existing.rowCount > 0) {
+          const uRes = await client.query(
+            `UPDATE hvac_jobs
+             SET outcome = 'booked', updated_at = $1, appointment = $2
+             WHERE id = $3 AND tenant_id = $4
+             RETURNING *`,
+            [now, JSON.stringify(appointment), jobId, ctx.tenant.id]
+          );
+          job = uRes.rows[0];
+        } else {
+          const iRes = await client.query(
+            `INSERT INTO hvac_jobs (id, tenant_id, caller_name, phone, email, service, urgency, assigned_to, notes, outcome, appointment, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'booked', $10, $11, $12)
+             RETURNING *`,
+            [jobId, ctx.tenant.id, name, phone, email, String(b.service || 'General HVAC').slice(0, 80), String(b.urgency || 'normal').slice(0, 30), '', '', JSON.stringify(appointment), now, now]
+          );
+          job = iRes.rows[0];
+        }
+        await db.addAuditSql(client, ctx, 'hvac.booking.created', 'hvac_job', job.id, { eventTypeId, bookingUid: appointment.calBookingUid || '' });
+      });
+      return core.sendJson(res, 201, { booking: booking.data, job: publicHvacJob(job) });
+    }
+
     await core.mutate((d) => {
       job = b.jobId ? d.hvacJobs.find((item) => item.id === String(b.jobId) && item.tenantId === ctx.tenant.id) : null;
       if (!job) { job = { id: core.genId('hvac_'), tenantId: ctx.tenant.id, callerName: name, phone, email, service: String(b.service || 'General HVAC').slice(0, 80), urgency: String(b.urgency || 'normal').slice(0, 30), assignedTo: '', notes: '', createdAt: now }; d.hvacJobs.push(job); }
-      job.outcome = 'booked'; job.updatedAt = now; job.appointment = { calBookingUid: booking.data && booking.data.uid, eventTypeId, start: booking.data && booking.data.start, end: booking.data && booking.data.end, status: booking.data && booking.data.status, timezone: HVAC_TIMEZONE };
+      job.outcome = 'booked'; job.updatedAt = now; job.appointment = appointment;
       addAudit(d, ctx, 'hvac.booking.created', 'hvac_job', job.id, { eventTypeId, bookingUid: job.appointment.calBookingUid || '' });
     });
     core.sendJson(res, 201, { booking: booking.data, job: publicHvacJob(job) });
   } catch (e) { handleProviderError(res, e); }
 }
 
-function apiAgentsList(req, res, ctx) {
+async function apiAgentsList(req, res, ctx) {
+  if (db.isPostgres) {
+    const { rows } = await db.query('SELECT * FROM agents WHERE tenant_id = $1 ORDER BY created_at DESC', [ctx.tenant.id]);
+    const agents = rows.map((a) => publicAgent({ ...a, tenantId: a.tenant_id, presetId: a.preset_id, createdAt: a.created_at.toISOString() }));
+    return core.sendJson(res, 200, { agents });
+  }
   const agents = core.db().agents
     .filter((a) => a.tenantId === ctx.tenant.id)
     .map(publicAgent);
@@ -557,8 +671,18 @@ function apiAgentsList(req, res, ctx) {
 
 async function apiAgentsCreate(req, res, ctx) {
   const b = ctx.body || {};
-  const preset = b.presetId ? core.db().presets.find((p) => p.id === String(b.presetId) && (p.isSystem || p.tenantId === ctx.tenant.id)) : null;
-  if (b.presetId && !preset) return core.sendJson(res, 404, { error: 'preset not found', code: 'not_found' });
+  let preset = null;
+  if (db.isPostgres) {
+    if (b.presetId) {
+      const pRes = await db.query('SELECT * FROM presets WHERE id = $1 AND (is_system = true OR tenant_id = $2)', [String(b.presetId), ctx.tenant.id]);
+      if (pRes.rowCount === 0) return core.sendJson(res, 404, { error: 'preset not found', code: 'not_found' });
+      const pRow = pRes.rows[0];
+      preset = { ...pRow, isSystem: pRow.is_system, tenantId: pRow.tenant_id, fields: pRow.fields || [], guardrails: pRow.guardrails || [] };
+    }
+  } else {
+    preset = b.presetId ? core.db().presets.find((p) => p.id === String(b.presetId) && (p.isSystem || p.tenantId === ctx.tenant.id)) : null;
+    if (b.presetId && !preset) return core.sendJson(res, 404, { error: 'preset not found', code: 'not_found' });
+  }
   const ttsIn = b.tts || {};
   const model = ttsIn.model === 'muga' ? 'muga' : providers.tts.model;
   const speaker = providers.TTS_SPEAKERS.has(ttsIn.speaker) ? ttsIn.speaker : 'speaker_1';
@@ -568,57 +692,102 @@ async function apiAgentsCreate(req, res, ctx) {
     id: core.genId('ag_'),
     tenantId: ctx.tenant.id,
     name: String(b.name || (preset && preset.name) || 'Untitled Agent').slice(0, 60),
-    persona: String(b.persona || (preset ? `${preset.name}. Collect: ${preset.fields.join(', ')}. Guardrails: ${preset.guardrails.join('; ')}.` : '')).slice(0, 1500),
+    persona: String(b.persona || (preset ? `${preset.name}. Collect: ${(preset.fields||[]).join(', ')}. Guardrails: ${(preset.guardrails||[]).join('; ')}.` : '')).slice(0, 1500),
     tts: { provider: providers.tts.id, model, speaker, f0_up_key: f0 },
     greeting: String(b.greeting || (preset && preset.greeting) || '').slice(0, 300),
     presetId: preset ? preset.id : null,
     telephony: { did: String(b.did || providers.telephony.did).replace(/[^0-9]/g, '') || providers.telephony.did },
     createdAt: new Date().toISOString(),
   };
-  await core.mutate((d) => { d.agents.push(agent); });
+
+  if (db.isPostgres) {
+    await db.query(
+      'INSERT INTO agents (id, tenant_id, name, persona, tts, greeting, telephony, preset_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+      [agent.id, agent.tenantId, agent.name, agent.persona, agent.tts, agent.greeting, agent.telephony, agent.presetId, agent.createdAt]
+    );
+  } else {
+    await core.mutate((d) => { d.agents.push(agent); });
+  }
   core.sendJson(res, 200, { agent: publicAgent(agent) });
 }
 
 async function apiAgentsUpdate(req, res, ctx) {
   const b = ctx.body || {};
   const id = String(b.id || '');
-  const d = core.db();
-  const agent = d.agents.find((a) => a.id === id);
-  if (!agent) return core.sendJson(res, 404, { error: 'agent not found', code: 'not_found' });
-  if (agent.tenantId !== ctx.tenant.id) {
-    return core.sendJson(res, 403, { error: 'not your agent', code: 'forbidden' });
-  }
   let updated;
-  await core.mutate((dd) => {
-    const a = dd.agents.find((x) => x.id === id);
-    if (b.name != null) a.name = String(b.name).slice(0, 60);
-    if (b.persona != null) a.persona = String(b.persona).slice(0, 1500);
-    if (b.greeting != null) a.greeting = String(b.greeting).slice(0, 300);
-    if (b.did != null) {
-      const did = String(b.did).replace(/[^0-9]/g, '');
-      a.telephony = { ...(a.telephony || {}), did: did || providers.telephony.did };
-    }
+  
+  if (db.isPostgres) {
+    const aRes = await db.query('SELECT * FROM agents WHERE id = $1', [id]);
+    if (aRes.rowCount === 0) return core.sendJson(res, 404, { error: 'agent not found', code: 'not_found' });
+    const aRow = aRes.rows[0];
+    if (aRow.tenant_id !== ctx.tenant.id) return core.sendJson(res, 403, { error: 'not your agent', code: 'forbidden' });
+    
+    let tts = aRow.tts || { provider: providers.tts.id };
     if (b.tts && typeof b.tts === 'object') {
-      const t = a.tts || { provider: providers.tts.id };
-      if (b.tts.model != null) t.model = b.tts.model === 'muga' ? 'muga' : providers.tts.model;
-      if (providers.TTS_SPEAKERS.has(b.tts.speaker)) t.speaker = b.tts.speaker;
-      if (Number.isFinite(b.tts.f0_up_key)) t.f0_up_key = Math.max(-12, Math.min(12, b.tts.f0_up_key | 0));
-      t.provider = providers.tts.id;
-      a.tts = t;
+      if (b.tts.model != null) tts.model = b.tts.model === 'muga' ? 'muga' : providers.tts.model;
+      if (providers.TTS_SPEAKERS.has(b.tts.speaker)) tts.speaker = b.tts.speaker;
+      if (Number.isFinite(b.tts.f0_up_key)) tts.f0_up_key = Math.max(-12, Math.min(12, b.tts.f0_up_key | 0));
+      tts.provider = providers.tts.id;
     }
-    updated = a;
-  });
+    
+    let telephony = aRow.telephony || {};
+    if (b.did != null) telephony.did = String(b.did).replace(/[^0-9]/g, '') || providers.telephony.did;
+    
+    const name = b.name != null ? String(b.name).slice(0, 60) : aRow.name;
+    const persona = b.persona != null ? String(b.persona).slice(0, 1500) : aRow.persona;
+    const greeting = b.greeting != null ? String(b.greeting).slice(0, 300) : aRow.greeting;
+    
+    const upRes = await db.query(
+      'UPDATE agents SET name = $1, persona = $2, greeting = $3, telephony = $4, tts = $5 WHERE id = $6 RETURNING *',
+      [name, persona, greeting, telephony, tts, id]
+    );
+    const row = upRes.rows[0];
+    updated = { ...row, tenantId: row.tenant_id, presetId: row.preset_id, createdAt: row.created_at.toISOString() };
+  } else {
+    const d = core.db();
+    const agent = d.agents.find((a) => a.id === id);
+    if (!agent) return core.sendJson(res, 404, { error: 'agent not found', code: 'not_found' });
+    if (agent.tenantId !== ctx.tenant.id) {
+      return core.sendJson(res, 403, { error: 'not your agent', code: 'forbidden' });
+    }
+    await core.mutate((dd) => {
+      const a = dd.agents.find((x) => x.id === id);
+      if (b.name != null) a.name = String(b.name).slice(0, 60);
+      if (b.persona != null) a.persona = String(b.persona).slice(0, 1500);
+      if (b.greeting != null) a.greeting = String(b.greeting).slice(0, 300);
+      if (b.did != null) {
+        const did = String(b.did).replace(/[^0-9]/g, '');
+        a.telephony = { ...(a.telephony || {}), did: did || providers.telephony.did };
+      }
+      if (b.tts && typeof b.tts === 'object') {
+        const t = a.tts || { provider: providers.tts.id };
+        if (b.tts.model != null) t.model = b.tts.model === 'muga' ? 'muga' : providers.tts.model;
+        if (providers.TTS_SPEAKERS.has(b.tts.speaker)) t.speaker = b.tts.speaker;
+        if (Number.isFinite(b.tts.f0_up_key)) t.f0_up_key = Math.max(-12, Math.min(12, b.tts.f0_up_key | 0));
+        t.provider = providers.tts.id;
+        a.tts = t;
+      }
+      updated = a;
+    });
+  }
   core.sendJson(res, 200, { agent: publicAgent(updated) });
 }
 
 async function apiAgentsDelete(req, res, ctx) {
   const id = String((ctx.body || {}).id || '');
-  const agent = core.db().agents.find((a) => a.id === id);
-  if (!agent) return core.sendJson(res, 404, { error: 'agent not found', code: 'not_found' });
-  if (agent.tenantId !== ctx.tenant.id) {
-    return core.sendJson(res, 403, { error: 'not your agent', code: 'forbidden' });
+  if (db.isPostgres) {
+    const aRes = await db.query('SELECT tenant_id FROM agents WHERE id = $1', [id]);
+    if (aRes.rowCount === 0) return core.sendJson(res, 404, { error: 'agent not found', code: 'not_found' });
+    if (aRes.rows[0].tenant_id !== ctx.tenant.id) return core.sendJson(res, 403, { error: 'not your agent', code: 'forbidden' });
+    await db.query('DELETE FROM agents WHERE id = $1', [id]);
+  } else {
+    const agent = core.db().agents.find((a) => a.id === id);
+    if (!agent) return core.sendJson(res, 404, { error: 'agent not found', code: 'not_found' });
+    if (agent.tenantId !== ctx.tenant.id) {
+      return core.sendJson(res, 403, { error: 'not your agent', code: 'forbidden' });
+    }
+    await core.mutate((d) => { d.agents = d.agents.filter((a) => a.id !== id); });
   }
-  await core.mutate((d) => { d.agents = d.agents.filter((a) => a.id !== id); });
   core.sendJson(res, 200, { ok: true });
 }
 
@@ -754,7 +923,14 @@ function tenantDemoLinks(tenantId) {
   return core.db().demoLinks.filter((link) => link.tenantId === tenantId);
 }
 
-function apiDemoLinksList(req, res, ctx) {
+async function apiDemoLinksList(req, res, ctx) {
+  if (db.isPostgres) {
+    const { rows } = await db.query('SELECT * FROM demo_links WHERE tenant_id = $1 ORDER BY created_at DESC', [ctx.tenant.id]);
+    const links = rows.map(r => demoLinks.publicDemoLink({
+      ...r, tenantId: r.tenant_id, agentId: r.agent_id, tokenHash: r.token_hash, maxStarts: r.max_starts, maxSessionSeconds: r.max_session_seconds, expiresAt: r.expires_at ? r.expires_at.toISOString() : null, revokedAt: r.revoked_at ? r.revoked_at.toISOString() : null, revokedBy: r.revoked_by, createdBy: r.created_by, createdAt: r.created_at.toISOString()
+    }));
+    return core.sendJson(res, 200, { demoLinks: links });
+  }
   const links = tenantDemoLinks(ctx.tenant.id)
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .map((link) => demoLinks.publicDemoLink(link));
@@ -764,8 +940,17 @@ function apiDemoLinksList(req, res, ctx) {
 async function apiDemoLinksCreate(req, res, ctx) {
   if (rejectImpersonated(res, ctx)) return;
   const body = ctx.body || {};
-  const agent = core.db().agents.find((item) => item.id === String(body.agentId || '') && item.tenantId === ctx.tenant.id);
-  if (!agent) return core.sendJson(res, 404, { error: 'agent not found', code: 'not_found' });
+  let agent;
+  
+  if (db.isPostgres) {
+    const aRes = await db.query('SELECT id, name FROM agents WHERE id = $1 AND tenant_id = $2', [String(body.agentId || ''), ctx.tenant.id]);
+    if (aRes.rowCount === 0) return core.sendJson(res, 404, { error: 'agent not found', code: 'not_found' });
+    agent = aRes.rows[0];
+  } else {
+    agent = core.db().agents.find((item) => item.id === String(body.agentId || '') && item.tenantId === ctx.tenant.id);
+    if (!agent) return core.sendJson(res, 404, { error: 'agent not found', code: 'not_found' });
+  }
+  
   const generated = demoLinks.createDemoToken();
   const limits = demoLinks.normalizeDemoLimits(body);
   const link = {
@@ -774,23 +959,50 @@ async function apiDemoLinksCreate(req, res, ctx) {
     status: 'active', starts: 0, createdBy: ctx.user.id, createdAt: new Date().toISOString(),
     ...limits,
   };
-  await core.mutate((database) => {
-    database.demoLinks.push(link);
-    addAudit(database, ctx, 'demo_link.created', 'demo_link', link.id, { agentId: agent.id, expiresAt: link.expiresAt, maxStarts: link.maxStarts });
-  });
+  
+  if (db.isPostgres) {
+    await db.transaction(async (client) => {
+      await client.query(
+        'INSERT INTO demo_links (id, token_hash, tenant_id, agent_id, label, status, starts, max_starts, max_session_seconds, expires_at, revoked_at, revoked_by, created_by, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
+        [link.id, link.tokenHash, link.tenantId, link.agentId, link.label, link.status, link.starts, link.maxStarts, link.maxSessionSeconds, link.expiresAt, link.revokedAt, link.revokedBy, link.createdBy, link.createdAt]
+      );
+      await client.query(
+        'INSERT INTO audit_events (id, tenant_id, user_id, action, resource_type, resource_id, metadata, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        [core.genId('au_'), ctx.tenant.id, ctx.user.id, 'demo_link.created', 'demo_link', link.id, { agentId: agent.id, expiresAt: link.expiresAt, maxStarts: link.maxStarts }, new Date().toISOString()]
+      );
+    });
+  } else {
+    await core.mutate((database) => {
+      database.demoLinks.push(link);
+      addAudit(database, ctx, 'demo_link.created', 'demo_link', link.id, { agentId: agent.id, expiresAt: link.expiresAt, maxStarts: link.maxStarts });
+    });
+  }
   core.sendJson(res, 201, { demoLink: demoLinks.publicDemoLink(link), sharePath: `/demo/${generated.token}` });
 }
 
 async function apiDemoLinksRevoke(req, res, ctx) {
   if (rejectImpersonated(res, ctx)) return;
   const id = String((ctx.body || {}).id || '');
-  const link = core.db().demoLinks.find((item) => item.id === id && item.tenantId === ctx.tenant.id);
-  if (!link) return core.sendJson(res, 404, { error: 'demo link not found', code: 'not_found' });
-  await core.mutate((database) => {
-    const target = database.demoLinks.find((item) => item.id === id && item.tenantId === ctx.tenant.id);
-    target.status = 'revoked'; target.revokedAt = new Date().toISOString(); target.revokedBy = ctx.user.id;
-    addAudit(database, ctx, 'demo_link.revoked', 'demo_link', id, { agentId: target.agentId });
-  });
+  
+  if (db.isPostgres) {
+    const lRes = await db.query('SELECT agent_id FROM demo_links WHERE id = $1 AND tenant_id = $2', [id, ctx.tenant.id]);
+    if (lRes.rowCount === 0) return core.sendJson(res, 404, { error: 'demo link not found', code: 'not_found' });
+    await db.transaction(async (client) => {
+      await client.query('UPDATE demo_links SET status = $1, revoked_at = $2, revoked_by = $3 WHERE id = $4', ['revoked', new Date().toISOString(), ctx.user.id, id]);
+      await client.query(
+        'INSERT INTO audit_events (id, tenant_id, user_id, action, resource_type, resource_id, metadata, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+        [core.genId('au_'), ctx.tenant.id, ctx.user.id, 'demo_link.revoked', 'demo_link', id, { agentId: lRes.rows[0].agent_id }, new Date().toISOString()]
+      );
+    });
+  } else {
+    const link = core.db().demoLinks.find((item) => item.id === id && item.tenantId === ctx.tenant.id);
+    if (!link) return core.sendJson(res, 404, { error: 'demo link not found', code: 'not_found' });
+    await core.mutate((database) => {
+      const target = database.demoLinks.find((item) => item.id === id && item.tenantId === ctx.tenant.id);
+      target.status = 'revoked'; target.revokedAt = new Date().toISOString(); target.revokedBy = ctx.user.id;
+      addAudit(database, ctx, 'demo_link.revoked', 'demo_link', id, { agentId: target.agentId });
+    });
+  }
   core.sendJson(res, 200, { ok: true });
 }
 
@@ -886,21 +1098,36 @@ async function apiTelephonyDial(req, res, ctx) {
 }
 
 // GET /api/usage -> tenant scoped daily rows + totals, with a rough INR cost.
-function apiUsage(req, res, ctx) {
-  const rows = core.db().usage
-    .filter((u) => u.tenantId === ctx.tenant.id)
-    .sort((a, b) => (a.day < b.day ? -1 : 1));
-  // Economics estimate for the promotional AI layer. Telephony and other
-  // carrier-inclusive costs are tracked separately and are not implied here.
+async function apiUsage(req, res, ctx) {
   const INR_PER_1K_CHARS = 0.12;
   const INR_PER_CALL = 0.9;
-  const days = rows.map((r) => ({
-    day: r.day,
-    chars: r.chars || 0,
-    calls: r.calls || 0,
-    llmTokens: r.llmTokens || 0,
-    costInr: Math.round(((r.chars || 0) / 1000 * INR_PER_1K_CHARS + (r.calls || 0) * INR_PER_CALL) * 100) / 100,
-  }));
+
+  let days;
+  if (db.isPostgres) {
+    const { rows } = await db.query(
+      'SELECT day, chars, calls, llm_tokens FROM usage WHERE tenant_id = $1 ORDER BY day ASC',
+      [ctx.tenant.id]
+    );
+    days = rows.map((r) => ({
+      day: toIso(r.day).slice(0, 10),
+      chars: r.chars || 0,
+      calls: r.calls || 0,
+      llmTokens: r.llm_tokens || 0,
+      costInr: Math.round(((r.chars || 0) / 1000 * INR_PER_1K_CHARS + (r.calls || 0) * INR_PER_CALL) * 100) / 100,
+    }));
+  } else {
+    const rows = core.db().usage
+      .filter((u) => u.tenantId === ctx.tenant.id)
+      .sort((a, b) => (a.day < b.day ? -1 : 1));
+    days = rows.map((r) => ({
+      day: r.day,
+      chars: r.chars || 0,
+      calls: r.calls || 0,
+      llmTokens: r.llmTokens || 0,
+      costInr: Math.round(((r.chars || 0) / 1000 * INR_PER_1K_CHARS + (r.calls || 0) * INR_PER_CALL) * 100) / 100,
+    }));
+  }
+
   const totals = days.reduce((acc, d) => ({
     chars: acc.chars + d.chars,
     calls: acc.calls + d.calls,
@@ -910,7 +1137,28 @@ function apiUsage(req, res, ctx) {
   core.sendJson(res, 200, { days, totals });
 }
 
-function apiPresets(req, res, ctx) {
+async function apiPresets(req, res, ctx) {
+  if (db.isPostgres) {
+    const { rows } = await db.query(
+      'SELECT * FROM presets WHERE is_system = true OR tenant_id = $1 ORDER BY created_at ASC',
+      [ctx.tenant.id]
+    );
+    const presets = rows.map((p) => ({
+      id: p.id,
+      tenantId: p.tenant_id,
+      slug: p.slug,
+      name: p.name,
+      category: p.category,
+      version: p.version,
+      isSystem: p.is_system,
+      greeting: p.greeting,
+      persona: p.persona,
+      fields: p.fields || [],
+      guardrails: p.guardrails || [],
+      createdAt: toIso(p.created_at),
+    }));
+    return core.sendJson(res, 200, { presets });
+  }
   const presets = core.db().presets.filter((p) => p.isSystem || p.tenantId === ctx.tenant.id);
   core.sendJson(res, 200, { presets });
 }
@@ -943,7 +1191,20 @@ async function apiPaymentIntentCreate(req, res, ctx) {
       checkout = payu.buildCheckout({ intent, customer, successUrl: `${origin}/api/payu/callback`, failureUrl: `${origin}/api/payu/return`, config: cfg });
     } catch (e) { return core.sendJson(res, 503, { error: 'PayU checkout configuration is invalid', code: 'payu_config' }); }
   }
-  await core.mutate((d) => { d.paymentIntents.push(intent); addAudit(d, ctx, 'billing.payment_intent.created', 'payment_intent', intent.id, { packId, amountPaise: intent.amountPaise }); });
+
+  if (db.isPostgres) {
+    await db.transaction(async (client) => {
+      await client.query(
+        `INSERT INTO payment_intents (id, tenant_id, user_id, provider, txnid, pack_id, product_info, amount, amount_paise, credits, customer, gateway_payload, intent_token, status, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        [intent.id, ctx.tenant.id, ctx.user.id, intent.provider, intent.txnid, packId, intent.productinfo, base.amount, intent.amountPaise, intent.credits, JSON.stringify(customer), JSON.stringify(intent.gatewayPayload || {}), intent.intentToken || null, intent.status || 'pending', base.createdAt, intent.updatedAt]
+      );
+      await db.addAuditSql(client, ctx, 'billing.payment_intent.created', 'payment_intent', intent.id, { packId, amountPaise: intent.amountPaise });
+    });
+  } else {
+    await core.mutate((d) => { d.paymentIntents.push(intent); addAudit(d, ctx, 'billing.payment_intent.created', 'payment_intent', intent.id, { packId, amountPaise: intent.amountPaise }); });
+  }
+
   core.sendJson(res, 201, { paymentIntent: { ...intent, intentToken: undefined, customer: undefined }, checkoutReady: !!checkout, checkout, message: checkout ? undefined : 'PayU is not configured. The intent is saved but cannot be paid yet.' });
 }
 
@@ -964,15 +1225,81 @@ async function apiPayuCallback(req, res, payload) {
   try { verification = await payu.verifyPayment({ intent, config: cfg }); }
   catch (_) { return core.sendJson(res, 502, { error: 'PayU verification unavailable', code: 'payu_verify_failed' }); }
   if (!verification.verified) return core.sendJson(res, 409, { error: verification.reason, code: 'payu_not_verified' });
+
   let entry; let duplicate = false;
-  await core.mutate((d) => {
-    const stored = d.paymentIntents.find((x) => x.id === intent.id);
-    if (stored.status === 'credited') { duplicate = true; return; }
-    entry = addLedgerEntry(d, stored.tenantId, stored.credits, 'payment_credit', `payu:${stored.txnid}`, stored.userId, { paymentIntentId: stored.id, payuId: verification.payuId, packId: stored.packId });
-    if (!entry) { duplicate = true; stored.status = 'credited'; return; }
-    stored.status = 'credited'; stored.payuId = verification.payuId; stored.updatedAt = new Date().toISOString();
-    d.auditEvents.push({ id: core.genId('aud_'), tenantId: stored.tenantId, actorUserId: stored.userId, action: 'billing.payment.credited', targetType: 'payment_intent', targetId: stored.id, metadata: { ledgerId: entry.id }, createdAt: stored.updatedAt });
-  });
+
+  if (db.isPostgres) {
+    try {
+      await db.transaction(async (client) => {
+        const now = new Date().toISOString();
+
+        // Lock payment_intent row to prevent concurrent webhook processing.
+        const intentRes = await client.query(
+          'SELECT id, tenant_id, status, credits, user_id, txnid, pack_id FROM payment_intents WHERE id = $1 FOR UPDATE',
+          [intent.id]
+        );
+        if (intentRes.rowCount === 0) {
+          throw Object.assign(new Error('payment intent not found in transaction'), { statusCode: 404, code: 'not_found' });
+        }
+        const stored = intentRes.rows[0];
+
+        // Duplicate detection: if already credited, skip the credit operation.
+        if (stored.status === 'credited') {
+          duplicate = true;
+          return;
+        }
+
+        // addLedgerEntrySql locks the wallet FOR UPDATE and inserts ledger atomically.
+        entry = await db.addLedgerEntrySql(
+          client,
+          stored.tenant_id,
+          stored.credits,
+          'payment_credit',
+          `payu:${stored.txnid}`,
+          stored.user_id,
+          { paymentIntentId: stored.id, payuId: verification.payuId, packId: stored.pack_id }
+        );
+
+        if (!entry) {
+          // Idempotency key already exists (ledger dedup), treat as duplicate.
+          duplicate = true;
+          await client.query(
+            'UPDATE payment_intents SET status = $1, updated_at = $2 WHERE id = $3',
+            ['credited', now, stored.id]
+          );
+          return;
+        }
+
+        // Update payment_intents with credited status and payuId.
+        await client.query(
+          'UPDATE payment_intents SET status = $1, payu_id = $2, updated_at = $3 WHERE id = $4',
+          ['credited', verification.payuId, now, stored.id]
+        );
+
+        // Insert audit event.
+        await client.query(
+          `INSERT INTO audit_events (id, tenant_id, actor_user_id, subject_user_id, action, target_type, target_id, metadata, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+          [core.genId('aud_'), stored.tenant_id, stored.user_id, null, 'billing.payment.credited', 'payment_intent', stored.id, JSON.stringify({ ledgerId: entry.id }), now]
+        );
+      });
+    } catch (err) {
+      if (err.statusCode) return core.sendJson(res, err.statusCode, { error: err.message, code: err.code });
+      console.error('apiPayuCallback transaction error:', err);
+      return core.sendJson(res, 500, { error: 'payment credit failed', code: 'transaction_failed' });
+    }
+  } else {
+    // JSON fallback path (no Postgres).
+    await core.mutate((d) => {
+      const stored = d.paymentIntents.find((x) => x.id === intent.id);
+      if (stored.status === 'credited') { duplicate = true; return; }
+      entry = addLedgerEntry(d, stored.tenantId, stored.credits, 'payment_credit', `payu:${stored.txnid}`, stored.userId, { paymentIntentId: stored.id, payuId: verification.payuId, packId: stored.packId });
+      if (!entry) { duplicate = true; stored.status = 'credited'; return; }
+      stored.status = 'credited'; stored.payuId = verification.payuId; stored.updatedAt = new Date().toISOString();
+      d.auditEvents.push({ id: core.genId('aud_'), tenantId: stored.tenantId, actorUserId: stored.userId, action: 'billing.payment.credited', targetType: 'payment_intent', targetId: stored.id, metadata: { ledgerId: entry.id }, createdAt: stored.updatedAt });
+    });
+  }
+
   core.sendJson(res, 200, { ok: true, credited: !duplicate, duplicate });
 }
 
@@ -981,7 +1308,36 @@ function apiPayuReturn(req, res, payload) {
   core.sendJson(res, 202, { ...result, message: 'Payment is pending server verification. A browser return never credits the wallet.' });
 }
 
-function apiSupportList(req, res, ctx) {
+async function apiSupportList(req, res, ctx) {
+  if (db.isPostgres) {
+    const ticketsRes = await db.query('SELECT * FROM support_tickets WHERE tenant_id = $1 ORDER BY created_at DESC', [ctx.tenant.id]);
+    const tickets = ticketsRes.rows;
+    if (tickets.length > 0) {
+      const ticketIds = tickets.map((t) => t.id);
+      const msgsRes = await db.query(
+        'SELECT * FROM support_messages WHERE ticket_id = ANY($1::text[]) ORDER BY created_at ASC',
+        [ticketIds]
+      );
+      const messagesByTicket = {};
+      for (const m of msgsRes.rows) {
+        if (!messagesByTicket[m.ticketId]) messagesByTicket[m.ticketId] = [];
+        messagesByTicket[m.ticketId].push({
+          id: m.id,
+          ticketId: m.ticketId,
+          tenantId: ctx.tenant.id,
+          authorUserId: m.userId,
+          body: m.body,
+          internal: false,
+          createdAt: m.createdAt,
+        });
+      }
+      for (const t of tickets) {
+        t.messages = messagesByTicket[t.id] || [];
+      }
+    }
+    return core.sendJson(res, 200, { tickets });
+  }
+
   const d = core.db();
   const tickets = d.supportTickets.filter((x) => x.tenantId === ctx.tenant.id).map((t) => ({ ...t, messages: d.supportMessages.filter((m) => m.ticketId === t.id && m.tenantId === ctx.tenant.id && !m.internal) }));
   core.sendJson(res, 200, { tickets });
@@ -992,16 +1348,68 @@ async function apiSupportCreate(req, res, ctx) {
   const subject = String(b.subject || '').trim().slice(0, 120);
   const message = String(b.message || '').trim().slice(0, 5000);
   if (!subject || !message) return core.sendJson(res, 422, { error: 'subject and message required', code: 'bad_ticket' });
+  const priority = ['low', 'normal', 'high', 'urgent'].includes(b.priority) ? b.priority : 'normal';
   const now = new Date().toISOString();
-  const ticket = { id: core.genId('tic_'), tenantId: ctx.tenant.id, createdBy: ctx.user.id, subject, priority: ['low', 'normal', 'high', 'urgent'].includes(b.priority) ? b.priority : 'normal', status: 'open', createdAt: now, updatedAt: now };
-  const first = { id: core.genId('msg_'), ticketId: ticket.id, tenantId: ctx.tenant.id, authorUserId: ctx.user.id, body: message, internal: false, createdAt: now };
+  const ticketId = core.genId('tic_');
+  const msgId = core.genId('msg_');
+
+  if (db.isPostgres) {
+    await db.transaction(async (client) => {
+      await client.query(
+        `INSERT INTO support_tickets (id, tenant_id, subject, status, priority, created_by, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [ticketId, ctx.tenant.id, subject, 'open', priority, ctx.user.id, now, now]
+      );
+      await client.query(
+        `INSERT INTO support_messages (id, ticket_id, user_id, body, created_at)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [msgId, ticketId, ctx.user.id, message, now]
+      );
+      await db.addAuditSql(client, ctx, 'support.ticket.created', 'ticket', ticketId);
+    });
+    const ticket = {
+      id: ticketId,
+      tenantId: ctx.tenant.id,
+      createdBy: ctx.user.id,
+      subject,
+      priority,
+      status: 'open',
+      createdAt: now,
+      updatedAt: now,
+      messages: [{ id: msgId, ticketId, tenantId: ctx.tenant.id, authorUserId: ctx.user.id, body: message, internal: false, createdAt: now }],
+    };
+    return core.sendJson(res, 201, { ticket });
+  }
+
+  const ticket = { id: ticketId, tenantId: ctx.tenant.id, createdBy: ctx.user.id, subject, priority, status: 'open', createdAt: now, updatedAt: now };
+  const first = { id: msgId, ticketId: ticket.id, tenantId: ctx.tenant.id, authorUserId: ctx.user.id, body: message, internal: false, createdAt: now };
   await core.mutate((d) => { d.supportTickets.push(ticket); d.supportMessages.push(first); addAudit(d, ctx, 'support.ticket.created', 'ticket', ticket.id); });
   core.sendJson(res, 201, { ticket: { ...ticket, messages: [first] } });
 }
 
 async function apiSupportReply(req, res, ctx) {
   const b = ctx.body || {};
-  const ticket = core.db().supportTickets.find((t) => t.id === String(b.ticketId || '') && t.tenantId === ctx.tenant.id);
+  const ticketId = String(b.ticketId || '');
+
+  if (db.isPostgres) {
+    // Tenant-scoped lookup. 404 preserves the JSON handler's cross-tenant safety.
+    const tRes = await db.query('SELECT id, tenant_id, status FROM support_tickets WHERE id = $1 AND tenant_id = $2', [ticketId, ctx.tenant.id]);
+    if (tRes.rowCount === 0) return core.sendJson(res, 404, { error: 'ticket not found', code: 'not_found' });
+    const text = String(b.message || '').trim().slice(0, 5000);
+    if (!text) return core.sendJson(res, 422, { error: 'message required', code: 'bad_message' });
+    const msg = { id: core.genId('msg_'), ticketId, tenantId: ctx.tenant.id, authorUserId: ctx.user.id, body: text, internal: false, createdAt: new Date().toISOString() };
+    await db.transaction(async (client) => {
+      await client.query('UPDATE support_tickets SET updated_at = $1 WHERE id = $2', [msg.createdAt, ticketId]);
+      await client.query(
+        'INSERT INTO support_messages (id, ticket_id, user_id, body, created_at) VALUES ($1, $2, $3, $4, $5) RETURNING id',
+        [msg.id, ticketId, ctx.user.id, text, msg.createdAt]
+      );
+      await db.addAuditSql(client, ctx, 'support.ticket.replied', 'ticket', ticketId);
+    });
+    return core.sendJson(res, 201, { message: msg });
+  }
+
+  const ticket = core.db().supportTickets.find((t) => t.id === ticketId && t.tenantId === ctx.tenant.id);
   if (!ticket) return core.sendJson(res, 404, { error: 'ticket not found', code: 'not_found' });
   const text = String(b.message || '').trim().slice(0, 5000);
   if (!text) return core.sendJson(res, 422, { error: 'message required', code: 'bad_message' });
@@ -1010,7 +1418,24 @@ async function apiSupportReply(req, res, ctx) {
   core.sendJson(res, 201, { message: msg });
 }
 
-function apiByonList(req, res, ctx) {
+async function apiByonList(req, res, ctx) {
+  if (db.isPostgres) {
+    const { rows } = await db.query(
+      'SELECT id, tenant_id, provider, address, label, status, created_by, created_at FROM byon_connections WHERE tenant_id = $1 ORDER BY created_at DESC',
+      [ctx.tenant.id]
+    );
+    const connections = rows.map((x) => ({
+      id: x.id,
+      tenantId: x.tenant_id,
+      provider: x.provider,
+      address: x.address,
+      label: x.label,
+      status: x.status,
+      createdBy: x.created_by,
+      createdAt: toIso(x.created_at),
+    }));
+    return core.sendJson(res, 200, { connections });
+  }
   const connections = core.db().byonConnections.filter((x) => x.tenantId === ctx.tenant.id).map((x) => ({ ...x, credentials: undefined }));
   core.sendJson(res, 200, { connections });
 }
@@ -1023,7 +1448,34 @@ async function apiByonSave(req, res, ctx) {
   if (!['vobiz', 'twilio', 'telnyx', 'plivo', 'vonage', 'sip'].includes(provider)) return core.sendJson(res, 422, { error: 'unsupported BYON provider', code: 'bad_provider' });
   const address = String(b.address || '').replace(/[^0-9+]/g, '').slice(0, 32);
   if (!address) return core.sendJson(res, 422, { error: 'phone address required', code: 'bad_address' });
-  const connection = { id: core.genId('byon_'), tenantId: ctx.tenant.id, provider, address, label: String(b.label || '').slice(0, 64), status: 'pending_verification', createdBy: ctx.user.id, createdAt: new Date().toISOString() };
+  const label = String(b.label || '').slice(0, 64);
+  const now = new Date().toISOString();
+  const connectionId = core.genId('byon_');
+
+  if (db.isPostgres) {
+    await db.transaction(async (client) => {
+      await client.query(
+        `INSERT INTO byon_connections (id, tenant_id, provider, address, label, status, credentials, created_by, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+        [connectionId, ctx.tenant.id, provider, address, label, 'pending_verification', JSON.stringify({}), ctx.user.id, now]
+      );
+      await db.addAuditSql(client, ctx, 'telephony.byon.created', 'byon_connection', connectionId, { provider, address });
+    });
+    return core.sendJson(res, 201, {
+      connection: {
+        id: connectionId,
+        tenantId: ctx.tenant.id,
+        provider,
+        address,
+        label,
+        status: 'pending_verification',
+        createdBy: ctx.user.id,
+        createdAt: now,
+      }
+    });
+  }
+
+  const connection = { id: connectionId, tenantId: ctx.tenant.id, provider, address, label, status: 'pending_verification', createdBy: ctx.user.id, createdAt: now };
   await core.mutate((d) => { d.byonConnections.push(connection); addAudit(d, ctx, 'telephony.byon.created', 'byon_connection', connection.id, { provider, address }); });
   core.sendJson(res, 201, { connection });
 }
@@ -1031,15 +1483,30 @@ async function apiByonSave(req, res, ctx) {
 async function apiPrivacyMode(req, res, ctx) {
   const mode = String((ctx.body || {}).mode || '');
   if (!['standard', 'metadata_only', 'no_recording'].includes(mode)) return core.sendJson(res, 422, { error: 'invalid privacy mode', code: 'bad_privacy_mode' });
-  await core.mutate((d) => { const t = d.tenants.find((x) => x.id === ctx.tenant.id); t.privacyMode = mode; addAudit(d, ctx, 'tenant.privacy_mode.updated', 'tenant', t.id, { mode }); });
+  if (db.isPostgres) {
+    await db.transaction(async (client) => {
+      await client.query('UPDATE tenants SET privacy_mode = $1 WHERE id = $2', [mode, ctx.tenant.id]);
+      await db.addAuditSql(client, ctx, 'tenant.privacy_mode.updated', 'tenant', ctx.tenant.id, { mode });
+    });
+  } else {
+    await core.mutate((d) => { const t = d.tenants.find((x) => x.id === ctx.tenant.id); t.privacyMode = mode; addAudit(d, ctx, 'tenant.privacy_mode.updated', 'tenant', t.id, { mode }); });
+  }
   core.sendJson(res, 200, { mode });
 }
 
-function apiMembers(req, res, ctx) {
+async function apiMembers(req, res, ctx) {
+  if (db.isPostgres) {
+    const rows = await db.query('SELECT * FROM users WHERE tenant_id = $1 ORDER BY created_at ASC', [ctx.tenant.id]);
+    return core.sendJson(res, 200, { users: rows.rows.map(publicUser) });
+  }
   core.sendJson(res, 200, { users: core.db().users.filter((u) => u.tenantId === ctx.tenant.id).map(publicUser) });
 }
 
-function apiAudit(req, res, ctx) {
+async function apiAudit(req, res, ctx) {
+  if (db.isPostgres) {
+    const rows = await db.query('SELECT * FROM audit_events WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 200', [ctx.tenant.id]);
+    return core.sendJson(res, 200, { auditEvents: rows.rows });
+  }
   core.sendJson(res, 200, { auditEvents: core.db().auditEvents.filter((e) => e.tenantId === ctx.tenant.id).slice(-200).reverse() });
 }
 
@@ -1103,6 +1570,12 @@ function validDateOnly(value) {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
 
+function toIso(d) {
+  if (!d) return null;
+  if (d instanceof Date) return d.toISOString();
+  return String(d);
+}
+
 function publicInvoice(invoice) {
   return {
     id: invoice.id,
@@ -1137,11 +1610,18 @@ function apiInvoices(req, res, ctx) {
 async function apiInvoiceCreate(req, res, ctx) {
   if (rejectImpersonated(res, ctx)) return;
   const b = ctx.body || {};
-  const d = core.db();
   const requestedTenantId = String(b.tenantId || '');
-  const tenant = isPlatformUser(ctx.user)
-    ? d.tenants.find((row) => row.id === requestedTenantId)
-    : d.tenants.find((row) => row.id === ctx.tenant.id);
+  let tenant;
+  if (db.isPostgres) {
+    const targetId = isPlatformUser(ctx.user) ? requestedTenantId : ctx.tenant.id;
+    const tRes = await db.query('SELECT * FROM tenants WHERE id = $1', [targetId]);
+    tenant = tRes.rows[0];
+  } else {
+    const d = core.db();
+    tenant = isPlatformUser(ctx.user)
+      ? d.tenants.find((row) => row.id === requestedTenantId)
+      : d.tenants.find((row) => row.id === ctx.tenant.id);
+  }
   if (!tenant) return core.sendJson(res, 422, { error: 'valid client workspace required', code: 'bad_tenant' });
   const amountPaise = Number(b.amountPaise);
   const description = String(b.description || '').trim().slice(0, 500);
@@ -1207,28 +1687,47 @@ async function apiInvoiceStatus(req, res, ctx) {
   core.sendJson(res, 200, { invoice: publicInvoice(updated) });
 }
 
-function apiAgencyOverview(req, res, ctx) {
-  const d = core.db();
+async function apiAgencyOverview(req, res, ctx) {
   const platform = isPlatformUser(ctx.user);
-  const tenantIds = platform ? new Set(d.tenants.map((t) => t.id)) : new Set([ctx.tenant.id]);
-  const tenants = d.tenants.filter((t) => tenantIds.has(t.id));
-  const invoices = d.invoices.filter((row) => tenantIds.has(row.tenantId));
-  const usage = d.usage.filter((row) => tenantIds.has(row.tenantId));
-  const activities = d.clientActivities.filter((row) => tenantIds.has(row.tenantId) && (platform || row.visibility === 'tenant'));
-  const audit = d.auditEvents.filter((row) => tenantIds.has(row.tenantId));
+  let tenants, invoices, usage, activities, audit;
+
+  if (db.isPostgres) {
+    const tenantsRes = await db.query(platform ? 'SELECT * FROM tenants' : 'SELECT * FROM tenants WHERE id = $1', platform ? [] : [ctx.tenant.id]);
+    tenants = tenantsRes.rows;
+    const tenantIds = new Set(tenants.map((t) => t.id));
+
+    const d = core.db();
+    invoices = (d.invoices || []).filter((row) => tenantIds.has(row.tenantId));
+    usage = (d.usage || []).filter((row) => tenantIds.has(row.tenantId));
+    const [actRes, audRes] = await Promise.all([
+      db.query(platform ? 'SELECT * FROM client_activities' : 'SELECT * FROM client_activities WHERE tenant_id = $1', platform ? [] : [ctx.tenant.id]),
+      db.query(platform ? 'SELECT * FROM audit_events' : 'SELECT * FROM audit_events WHERE tenant_id = $1', platform ? [] : [ctx.tenant.id]),
+    ]);
+    activities = actRes.rows.filter((row) => platform || row.visibility === 'tenant');
+    audit = audRes.rows;
+  } else {
+    const d = core.db();
+    const tenantIds = platform ? new Set(d.tenants.map((t) => t.id)) : new Set([ctx.tenant.id]);
+    tenants = d.tenants.filter((t) => tenantIds.has(t.id));
+    invoices = d.invoices.filter((row) => tenantIds.has(row.tenantId));
+    usage = d.usage.filter((row) => tenantIds.has(row.tenantId));
+    activities = d.clientActivities.filter((row) => tenantIds.has(row.tenantId) && (platform || row.visibility === 'tenant'));
+    audit = d.auditEvents.filter((row) => tenantIds.has(row.tenantId));
+  }
+
   const days = [];
   for (let i = 29; i >= 0; i--) {
     const date = new Date(Date.now() - i * 86400000).toISOString().slice(0, 10);
-    const dayInvoices = invoices.filter((row) => row.issueDate === date && row.status !== 'draft' && row.status !== 'void');
-    const dayPaid = invoices.filter((row) => row.paidAt && row.paidAt.slice(0, 10) === date);
-    const dayUsage = usage.filter((row) => row.day === date);
-    const dayActivities = activities.filter((row) => row.createdAt.slice(0, 10) === date);
+    const dayInvoices = invoices.filter((row) => (toIso(row.issueDate) || '').slice(0, 10) === date && row.status !== 'draft' && row.status !== 'void');
+    const dayPaid = invoices.filter((row) => toIso(row.paidAt) && toIso(row.paidAt).slice(0, 10) === date);
+    const dayUsage = usage.filter((row) => (toIso(row.day) || '').slice(0, 10) === date);
+    const dayActivities = activities.filter((row) => (toIso(row.createdAt) || '').slice(0, 10) === date);
     days.push({
       date,
-      invoicedPaise: dayInvoices.reduce((sum, row) => sum + row.amountPaise, 0),
-      paidPaise: dayPaid.reduce((sum, row) => sum + row.amountPaise, 0),
+      invoicedPaise: dayInvoices.reduce((sum, row) => sum + Number(row.amountPaise || 0), 0),
+      paidPaise: dayPaid.reduce((sum, row) => sum + Number(row.amountPaise || 0), 0),
       calls: dayUsage.reduce((sum, row) => sum + Number(row.calls || 0), 0),
-      activity: dayActivities.length + audit.filter((row) => row.createdAt && row.createdAt.slice(0, 10) === date).length,
+      activity: dayActivities.length + audit.filter((row) => toIso(row.createdAt) && toIso(row.createdAt).slice(0, 10) === date).length,
     });
   }
   const issued = invoices.filter((row) => row.status === 'issued' || row.status === 'paid');
@@ -1240,19 +1739,19 @@ function apiAgencyOverview(req, res, ctx) {
     status: tenant.status || 'active',
     calls: usage.filter((row) => row.tenantId === tenant.id).reduce((sum, row) => sum + Number(row.calls || 0), 0),
     activity: activities.filter((row) => row.tenantId === tenant.id).length + audit.filter((row) => row.tenantId === tenant.id).length,
-    outstandingPaise: outstanding.filter((row) => row.tenantId === tenant.id).reduce((sum, row) => sum + row.amountPaise, 0),
+    outstandingPaise: outstanding.filter((row) => row.tenantId === tenant.id).reduce((sum, row) => sum + Number(row.amountPaise || 0), 0),
   })).sort((a, b) => (b.calls + b.activity) - (a.calls + a.activity)).slice(0, 8);
   const portfolio = ['active', 'onboarding', 'suspended', 'closed'].map((status) => ({ status, count: tenants.filter((t) => (t.status || 'active') === status).length }));
-  const recent = activities.slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)).slice(0, 12).map((row) => ({ id: row.id, tenantId: row.tenantId, tenantName: (d.tenants.find((t) => t.id === row.tenantId) || {}).name || 'Workspace', type: row.type, channel: row.channel, summary: row.summary, createdAt: row.createdAt }));
+  const recent = activities.slice().sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 12).map((row) => ({ id: row.id, tenantId: row.tenantId, tenantName: (tenants.find((t) => t.id === row.tenantId) || {}).name || 'Workspace', type: row.type, channel: row.channel, summary: row.summary, createdAt: toIso(row.createdAt) }));
   core.sendJson(res, 200, {
     dataMode: 'live_staging', currency: 'INR', asOf: new Date().toISOString(),
     kpis: {
       clients: tenants.length,
       activeClients: tenants.filter((t) => (t.status || 'active') === 'active').length,
       closedClients: tenants.filter((t) => t.status === 'closed').length,
-      invoicedPaise: issued.reduce((sum, row) => sum + row.amountPaise, 0),
-      paidPaise: paid.reduce((sum, row) => sum + row.amountPaise, 0),
-      outstandingPaise: outstanding.reduce((sum, row) => sum + row.amountPaise, 0),
+      invoicedPaise: issued.reduce((sum, row) => sum + Number(row.amountPaise || 0), 0),
+      paidPaise: paid.reduce((sum, row) => sum + Number(row.amountPaise || 0), 0),
+      outstandingPaise: outstanding.reduce((sum, row) => sum + Number(row.amountPaise || 0), 0),
       calls: usage.reduce((sum, row) => sum + Number(row.calls || 0), 0),
       activity: activities.length + audit.length,
     },
@@ -1264,9 +1763,39 @@ async function apiClientApproach(req, res, ctx) {
   if (rejectImpersonated(res, ctx)) return;
   if (!isPlatformUser(ctx.user)) return core.sendJson(res, 403, { error: 'platform admin required', code: 'forbidden' });
   const b = ctx.body || {};
-  const tenant = core.db().tenants.find((row) => row.id === String(b.tenantId || ''));
   const channel = String(b.channel || '').toLowerCase();
   const summary = String(b.summary || '').trim().slice(0, 500);
+  
+  if (db.isPostgres) {
+    const tRes = await db.query('SELECT id FROM tenants WHERE id = $1', [String(b.tenantId || '')]);
+    if (tRes.rowCount === 0 || !APPROACH_CHANNELS.has(channel) || !summary) return core.sendJson(res, 422, { error: 'valid client, channel, and summary required', code: 'bad_activity' });
+    
+    const tenantId = tRes.rows[0].id;
+    const now = new Date().toISOString();
+    let activity;
+
+    await db.transaction(async (client) => {
+      const actRes = await client.query(
+        `INSERT INTO client_activities (id, tenant_id, type, channel, visibility, summary, actor_user_id, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+         RETURNING id, tenant_id, type, channel, visibility, summary, actor_user_id, created_at`,
+        [core.genId('act_'), tenantId, 'approach', channel, 'internal', summary, ctx.user.id, now]
+      );
+      const row = actRes.rows[0];
+      activity = { id: row.id, tenantId: row.tenant_id, type: row.type, channel: row.channel, visibility: row.visibility, summary: row.summary, actorUserId: row.actor_user_id, createdAt: row.created_at };
+
+      await client.query('UPDATE tenants SET last_approached_at = $1 WHERE id = $2', [now, tenantId]);
+      await db.addAuditSql(client, ctx, 'client.approached', 'tenant', tenantId, { channel });
+    });
+
+    await core.mutate((store) => {
+      store.clientActivities.push(activity);
+    });
+
+    return core.sendJson(res, 201, { activity });
+  }
+
+  const tenant = core.db().tenants.find((row) => row.id === String(b.tenantId || ''));
   if (!tenant || !APPROACH_CHANNELS.has(channel) || !summary) return core.sendJson(res, 422, { error: 'valid client, channel, and summary required', code: 'bad_activity' });
   let activity;
   await core.mutate((store) => {
@@ -1279,10 +1808,26 @@ async function apiClientApproach(req, res, ctx) {
   core.sendJson(res, 201, { activity });
 }
 
-function apiIntegrations(req, res, ctx) {
-  const requests = core.db().integrationRequests.filter((row) => row.tenantId === ctx.tenant.id);
+async function apiIntegrations(req, res, ctx) {
+  let requests;
+  if (db.isPostgres) {
+    const { rows } = await db.query(
+      'SELECT * FROM integration_requests WHERE tenant_id = $1 ORDER BY created_at DESC',
+      [ctx.tenant.id]
+    );
+    requests = rows.map((r) => ({
+      id: r.id,
+      tenantId: r.tenantId || r.tenant_id,
+      integrationId: r.integrationId || r.integration_id,
+      status: r.status,
+      createdBy: r.createdBy || r.created_by,
+      createdAt: toIso(r.createdAt || r.created_at),
+    }));
+  } else {
+    requests = core.db().integrationRequests.filter((row) => row.tenantId === ctx.tenant.id);
+  }
   const integrations = INTEGRATION_CATALOG.map((item) => {
-    const request = requests.filter((row) => row.integrationId === item.id).sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+    const request = requests.filter((row) => row.integrationId === item.id).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0];
     return { ...item, status: request ? request.status : 'setup_required', requestedAt: request ? request.createdAt : null };
   });
   core.sendJson(res, 200, { integrations, note: 'Setup requests do not connect external services.' });
@@ -1293,6 +1838,37 @@ async function apiIntegrationRequest(req, res, ctx) {
   const integrationId = String((ctx.body || {}).integrationId || '');
   const item = INTEGRATION_CATALOG.find((row) => row.id === integrationId);
   if (!item) return core.sendJson(res, 422, { error: 'unknown integration', code: 'bad_integration' });
+
+  if (db.isPostgres) {
+    let request;
+    const existing = await db.query(
+      'SELECT * FROM integration_requests WHERE tenant_id = $1 AND integration_id = $2 AND status = $3',
+      [ctx.tenant.id, integrationId, 'requested']
+    );
+    if (existing.rowCount > 0) {
+      const r = existing.rows[0];
+      request = { id: r.id, tenantId: r.tenantId || r.tenant_id, integrationId: r.integrationId || r.integration_id, status: r.status, createdBy: r.createdBy || r.created_by, createdAt: toIso(r.createdAt || r.created_at) };
+    } else {
+      const now = new Date().toISOString();
+      const id = core.genId('int_');
+      await db.transaction(async (client) => {
+        await client.query(
+          `INSERT INTO integration_requests (id, tenant_id, integration_id, status, created_by, created_at)
+           VALUES ($1, $2, $3, $4, $5, $6)`,
+          [id, ctx.tenant.id, integrationId, 'requested', ctx.user.id, now]
+        );
+        await db.addAuditSql(client, ctx, 'integration.setup_requested', 'integration', integrationId);
+      });
+      request = { id, tenantId: ctx.tenant.id, integrationId, status: 'requested', createdBy: ctx.user.id, createdAt: now };
+    }
+    await core.mutate((store) => {
+      if (!store.integrationRequests.some((x) => x.id === request.id)) {
+        store.integrationRequests.push(request);
+      }
+    });
+    return core.sendJson(res, 201, { request, note: 'Request recorded. The integration is not connected.' });
+  }
+
   let request;
   await core.mutate((store) => {
     const existing = store.integrationRequests.find((row) => row.tenantId === ctx.tenant.id && row.integrationId === integrationId && row.status === 'requested');
@@ -1304,7 +1880,23 @@ async function apiIntegrationRequest(req, res, ctx) {
   core.sendJson(res, 201, { request, note: 'Request recorded. The integration is not connected.' });
 }
 
-function apiAgencyPromptGet(req, res, ctx) {
+async function apiAgencyPromptGet(req, res, ctx) {
+  if (db.isPostgres) {
+    const { rows } = await db.query(
+      `SELECT ap.tenant_id, ap.text, ap.version, ap.updated_by, ap.updated_at, u.name as editor_name, u.email as editor_email
+       FROM agency_prompts ap
+       LEFT JOIN users u ON u.id = ap.updated_by
+       WHERE ap.tenant_id = $1`,
+      [ctx.tenant.id]
+    );
+    const row = rows[0];
+    return core.sendJson(res, 200, {
+      prompt: row ? row.text : '',
+      version: row ? row.version : 0,
+      updatedAt: row ? toIso(row.updatedAt || row.updated_at) : null,
+      updatedBy: row ? (row.editorName || row.editor_name || row.editorEmail || row.editor_email) : null,
+    });
+  }
   const row = core.db().agencyPrompts.find((item) => item.tenantId === ctx.tenant.id);
   const editor = row ? core.db().users.find((user) => user.id === row.updatedBy) : null;
   core.sendJson(res, 200, { prompt: row ? row.text : '', version: row ? row.version : 0, updatedAt: row ? row.updatedAt : null, updatedBy: editor ? editor.name || editor.email : null });
@@ -1314,6 +1906,33 @@ async function apiAgencyPromptSave(req, res, ctx) {
   if (rejectImpersonated(res, ctx)) return;
   const text = String((ctx.body || {}).prompt || '').trim();
   if (text.length < 20 || text.length > 12000) return core.sendJson(res, 422, { error: 'agency prompt must be between 20 and 12,000 characters', code: 'bad_prompt' });
+  const now = new Date().toISOString();
+
+  if (db.isPostgres) {
+    let savedRow;
+    await db.transaction(async (client) => {
+      const res = await client.query(
+        `INSERT INTO agency_prompts (tenant_id, text, version, updated_by, updated_at)
+         VALUES ($1, $2, 1, $3, $4)
+         ON CONFLICT (tenant_id)
+         DO UPDATE SET text = EXCLUDED.text, version = agency_prompts.version + 1, updated_by = EXCLUDED.updated_by, updated_at = EXCLUDED.updated_at
+         RETURNING *`,
+        [ctx.tenant.id, text, ctx.user.id, now]
+      );
+      savedRow = res.rows[0];
+      await db.addAuditSql(client, ctx, 'agency.prompt.updated', 'agency_prompt', ctx.tenant.id, { version: savedRow.version });
+    });
+    await core.mutate((store) => {
+      const existing = store.agencyPrompts.find((item) => item.tenantId === ctx.tenant.id);
+      if (!existing) {
+        store.agencyPrompts.push({ tenantId: ctx.tenant.id, text, version: savedRow.version, updatedBy: ctx.user.id, updatedAt: now });
+      } else {
+        existing.text = text; existing.version = savedRow.version; existing.updatedBy = ctx.user.id; existing.updatedAt = now;
+      }
+    });
+    return core.sendJson(res, 200, { prompt: savedRow.text, version: savedRow.version, updatedAt: toIso(savedRow.updated_at), updatedBy: ctx.user.name || ctx.user.email });
+  }
+
   let row;
   await core.mutate((store) => {
     const now = new Date().toISOString();
@@ -1335,6 +1954,23 @@ async function apiTenantUpdate(req, res, ctx) {
   const name = String(b.name || '').trim().slice(0, 80);
   const color = String(b.color || '').trim();
   if (!name || !/^#[0-9a-fA-F]{6}$/.test(color)) return core.sendJson(res, 422, { error: 'valid tenant name and color required', code: 'bad_tenant' });
+
+  if (db.isPostgres) {
+    const tRes = await db.query('SELECT * FROM tenants WHERE id = $1', [ctx.tenant.id]);
+    if (tRes.rowCount === 0) return core.sendJson(res, 404, { error: 'tenant not found', code: 'not_found' });
+    const currentBranding = tRes.rows[0].branding || {};
+    const updatedBranding = { ...currentBranding, color };
+    await db.transaction(async (client) => {
+      await client.query(
+        'UPDATE tenants SET name = $1, branding = $2 WHERE id = $3',
+        [name, JSON.stringify(updatedBranding), ctx.tenant.id]
+      );
+      await db.addAuditSql(client, ctx, 'tenant.settings.updated', 'tenant', ctx.tenant.id);
+    });
+    const updated = { ...tRes.rows[0], name, branding: updatedBranding };
+    return core.sendJson(res, 200, { tenant: publicTenant(updated) });
+  }
+
   let tenant;
   await core.mutate((store) => {
     tenant = store.tenants.find((row) => row.id === ctx.tenant.id);
@@ -1348,13 +1984,50 @@ async function apiMemberRole(req, res, ctx) {
   const b = ctx.body || {};
   const role = String(b.role || '');
   if (!['owner', 'member'].includes(role)) return core.sendJson(res, 422, { error: 'tenant roles are owner or member', code: 'bad_role' });
+  if (db.isPostgres) {
+    const userId = String(b.userId || '');
+    const found = await db.query('SELECT id, tenant_id, email, name, role, status, created_at FROM users WHERE id = $1 AND tenant_id = $2', [userId, ctx.tenant.id]);
+    if (found.rowCount === 0) return core.sendJson(res, 404, { error: 'user not found', code: 'not_found' });
+    const target = found.rows[0];
+    await db.transaction(async (client) => {
+      await client.query('UPDATE users SET role = $1 WHERE id = $2 AND tenant_id = $3', [role, target.id, ctx.tenant.id]);
+      await db.addAuditSql(client, ctx, 'member.role.updated', 'user', target.id, { role });
+    });
+    return core.sendJson(res, 200, { user: publicUser({ ...target, role }) });
+  }
   const target = core.db().users.find((u) => u.id === String(b.userId || '') && u.tenantId === ctx.tenant.id);
   if (!target) return core.sendJson(res, 404, { error: 'user not found', code: 'not_found' });
   await core.mutate((d) => { const u = d.users.find((x) => x.id === target.id); u.role = role; addAudit(d, ctx, 'member.role.updated', 'user', u.id, { role }); });
   core.sendJson(res, 200, { user: publicUser({ ...target, role }) });
 }
 
-function apiAdminOverview(req, res) {
+async function apiAdminOverview(req, res) {
+  if (db.isPostgres) {
+    const [tenantsRes, usersRes, ticketsRes, walletsRes, usageRes, invoicesRes] = await Promise.all([
+      db.query('SELECT status FROM tenants'),
+      db.query('SELECT id FROM users'),
+      db.query('SELECT status FROM support_tickets'),
+      db.query('SELECT balance_paise FROM wallets'),
+      db.query('SELECT calls FROM usage'),
+      db.query('SELECT amount_paise, status FROM invoices'),
+    ]);
+
+    const tenants = tenantsRes.rows;
+    const issued = invoicesRes.rows.filter((row) => row.status === 'issued' || row.status === 'paid');
+
+    return core.sendJson(res, 200, { totals: {
+      tenants: tenants.length,
+      activeTenants: tenants.filter((t) => (t.status || 'active') === 'active').length,
+      closedTenants: tenants.filter((t) => t.status === 'closed').length,
+      users: usersRes.rows.length,
+      openTickets: ticketsRes.rows.filter((t) => t.status !== 'closed').length,
+      walletPaise: walletsRes.rows.reduce((n, w) => n + Number(w.balancePaise || 0), 0),
+      calls: usageRes.rows.reduce((n, u) => n + Number(u.calls || 0), 0),
+      invoicedPaise: issued.reduce((n, row) => n + Number(row.amountPaise || 0), 0),
+      outstandingPaise: invoicesRes.rows.filter((row) => row.status === 'issued').reduce((n, row) => n + Number(row.amountPaise || 0), 0),
+    } });
+  }
+
   const d = core.db();
   const issued = d.invoices.filter((row) => row.status === 'issued' || row.status === 'paid');
   core.sendJson(res, 200, { totals: {
@@ -1370,7 +2043,41 @@ function apiAdminOverview(req, res) {
   } });
 }
 
-function apiAdminTenants(req, res) {
+async function apiAdminTenants(req, res) {
+  if (db.isPostgres) {
+    const tenantsRes = await db.query('SELECT * FROM tenants ORDER BY created_at ASC');
+    const [usersRes, agentsRes, usageRes, invoicesRes, walletsRes] = await Promise.all([
+      db.query('SELECT tenant_id FROM users'),
+      db.query('SELECT tenant_id FROM agents'),
+      db.query('SELECT tenant_id, calls FROM usage'),
+      db.query('SELECT tenant_id, amount_paise, status FROM invoices'),
+      db.query('SELECT * FROM wallets'),
+    ]);
+
+    const usersCount = {};
+    for (const u of usersRes.rows) usersCount[u.tenantId] = (usersCount[u.tenantId] || 0) + 1;
+    const agentsCount = {};
+    for (const a of agentsRes.rows) agentsCount[a.tenantId] = (agentsCount[a.tenantId] || 0) + 1;
+    const callsCount = {};
+    for (const u of usageRes.rows) callsCount[u.tenantId] = (callsCount[u.tenantId] || 0) + Number(u.calls || 0);
+    const outstandingMap = {};
+    for (const inv of invoicesRes.rows) {
+      if (inv.status === 'issued') outstandingMap[inv.tenantId] = (outstandingMap[inv.tenantId] || 0) + Number(inv.amountPaise || 0);
+    }
+    const walletMap = {};
+    for (const w of walletsRes.rows) walletMap[w.tenantId] = w;
+
+    return core.sendJson(res, 200, { tenants: tenantsRes.rows.map((t) => ({
+      ...publicTenant(t),
+      users: usersCount[t.id] || 0,
+      agents: agentsCount[t.id] || 0,
+      calls: callsCount[t.id] || 0,
+      lastApproachedAt: t.lastApproachedAt || null,
+      outstandingPaise: outstandingMap[t.id] || 0,
+      wallet: publicWallet(walletMap[t.id] || { id: null, tenantId: t.id, currency: 'INR', balancePaise: 0 }),
+    })) });
+  }
+
   const d = core.db();
   core.sendJson(res, 200, { tenants: d.tenants.map((t) => ({
     ...publicTenant(t),
@@ -1480,19 +2187,108 @@ async function apiAdminTenantCreate(req, res, ctx) {
   core.sendJson(res, 201, { tenant: publicTenant(tenant), owner: user ? publicUser(user) : null, note: 'No email was sent.' });
 }
 
-function apiAdminUsers(req, res) { core.sendJson(res, 200, { users: core.db().users.map(publicUser) }); }
+async function apiAdminUsers(req, res) {
+  if (db.isPostgres) {
+    const rows = await db.query('SELECT * FROM users ORDER BY created_at ASC');
+    return core.sendJson(res, 200, { users: rows.rows.map(publicUser) });
+  }
+  core.sendJson(res, 200, { users: core.db().users.map(publicUser) });
+}
 
-function apiAdminAudit(req, res) { core.sendJson(res, 200, { auditEvents: core.db().auditEvents.slice(-500).reverse() }); }
+async function apiAdminAudit(req, res) {
+  if (db.isPostgres) {
+    const rows = await db.query('SELECT * FROM audit_events ORDER BY created_at DESC LIMIT 500');
+    return core.sendJson(res, 200, { auditEvents: rows.rows });
+  }
+  core.sendJson(res, 200, { auditEvents: core.db().auditEvents.slice(-500).reverse() });
+}
 
-function apiAdminTickets(req, res) {
+async function apiAdminTickets(req, res) {
+  if (db.isPostgres) {
+    const ticketsRes = await db.query('SELECT * FROM support_tickets ORDER BY created_at DESC');
+    const tickets = ticketsRes.rows;
+    if (tickets.length > 0) {
+      const ticketIds = tickets.map((t) => t.id);
+      const msgsRes = await db.query(
+        'SELECT * FROM support_messages WHERE ticket_id = ANY($1::text[]) ORDER BY created_at ASC',
+        [ticketIds]
+      );
+      const messagesByTicket = {};
+      for (const m of msgsRes.rows) {
+        if (!messagesByTicket[m.ticketId]) messagesByTicket[m.ticketId] = [];
+        messagesByTicket[m.ticketId].push({
+          id: m.id,
+          ticketId: m.ticketId,
+          authorUserId: m.userId,
+          body: m.body,
+          createdAt: m.createdAt,
+        });
+      }
+      for (const t of tickets) {
+        t.messages = messagesByTicket[t.id] || [];
+      }
+    }
+    return core.sendJson(res, 200, { tickets });
+  }
+
   const d = core.db();
   core.sendJson(res, 200, { tickets: d.supportTickets.map((t) => ({ ...t, messages: d.supportMessages.filter((m) => m.ticketId === t.id) })) });
 }
 
-function apiAdminPaymentEvents(req, res) { core.sendJson(res, 200, { events: core.db().paymentEvents.slice(-500).reverse() }); }
+async function apiAdminPaymentEvents(req, res) {
+  if (db.isPostgres) {
+    const rows = await db.query('SELECT * FROM payment_events ORDER BY created_at DESC LIMIT 500');
+    return core.sendJson(res, 200, { events: rows.rows });
+  }
+  core.sendJson(res, 200, { events: core.db().paymentEvents.slice(-500).reverse() });
+}
 
-function apiAdminTenantDetail(req, res) {
-  const url = new URL(req.url, 'http://localhost'); const tenantId = String(url.searchParams.get('tenantId') || ''); const d = core.db();
+async function apiAdminTenantDetail(req, res) {
+  const url = new URL(req.url, 'http://localhost'); const tenantId = String(url.searchParams.get('tenantId') || '');
+
+  if (db.isPostgres) {
+    const tRes = await db.query('SELECT * FROM tenants WHERE id = $1', [tenantId]);
+    if (tRes.rowCount === 0) return core.sendJson(res, 404, { error: 'tenant not found', code: 'not_found' });
+    const tenant = tRes.rows[0];
+
+    const [usersRes, agentsRes, byonRes, usageRes, ticketsRes, walletRes, ledgerRes, invoicesRes, activitiesRes, statusEventsRes] = await Promise.all([
+      db.query('SELECT * FROM users WHERE tenant_id = $1', [tenantId]),
+      db.query('SELECT * FROM agents WHERE tenant_id = $1', [tenantId]),
+      db.query('SELECT * FROM byon_connections WHERE tenant_id = $1', [tenantId]),
+      db.query('SELECT * FROM usage WHERE tenant_id = $1 ORDER BY day DESC LIMIT 100', [tenantId]),
+      db.query('SELECT * FROM support_tickets WHERE tenant_id = $1', [tenantId]),
+      db.query('SELECT * FROM wallets WHERE tenant_id = $1', [tenantId]),
+      db.query('SELECT * FROM ledger WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 100', [tenantId]),
+      db.query('SELECT * FROM invoices WHERE tenant_id = $1', [tenantId]),
+      db.query('SELECT * FROM client_activities WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 100', [tenantId]),
+      db.query('SELECT * FROM tenant_status_events WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 100', [tenantId]),
+    ]);
+
+    const jsonActivities = (core.db().clientActivities || []).filter((x) => x.tenantId === tenantId);
+    const combinedActivities = [...activitiesRes.rows];
+    for (const ja of jsonActivities) {
+      if (!combinedActivities.some((a) => a.id === ja.id)) {
+        combinedActivities.push(ja);
+      }
+    }
+    combinedActivities.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+    return core.sendJson(res, 200, {
+      tenant: publicTenant(tenant),
+      users: usersRes.rows.map(publicUser),
+      agents: agentsRes.rows.map(publicAgent),
+      numbers: byonRes.rows.map((x) => ({ id: x.id, provider: x.provider, address: x.address, label: x.label, status: x.status, createdAt: toIso(x.createdAt) })),
+      usage: usageRes.rows.reverse(),
+      tickets: ticketsRes.rows.map((t) => ({ ...t, createdAt: toIso(t.createdAt), updatedAt: toIso(t.updatedAt) })),
+      wallet: publicWallet(walletRes.rows[0] || { id: null, tenantId, currency: 'INR', balancePaise: 0 }),
+      ledger: ledgerRes.rows.map((l) => ({ ...l, createdAt: toIso(l.createdAt) })),
+      invoices: invoicesRes.rows.map(publicInvoice),
+      activities: combinedActivities.map((a) => ({ ...a, createdAt: toIso(a.createdAt) })),
+      statusEvents: statusEventsRes.rows.map((s) => ({ ...s, createdAt: toIso(s.createdAt) })),
+    });
+  }
+
+  const d = core.db();
   const tenant = d.tenants.find((t) => t.id === tenantId);
   if (!tenant) return core.sendJson(res, 404, { error: 'tenant not found', code: 'not_found' });
   core.sendJson(res, 200, { tenant: publicTenant(tenant), users: d.users.filter((u) => u.tenantId === tenantId).map(publicUser), agents: d.agents.filter((a) => a.tenantId === tenantId).map(publicAgent), numbers: d.byonConnections.filter((x) => x.tenantId === tenantId).map((x) => ({ id: x.id, provider: x.provider, address: x.address, label: x.label, status: x.status, createdAt: x.createdAt })), usage: d.usage.filter((x) => x.tenantId === tenantId).slice(-100).reverse(), tickets: d.supportTickets.filter((x) => x.tenantId === tenantId), wallet: publicWallet(d.wallets.find((w) => w.tenantId === tenantId) || { id: null, tenantId, currency: 'INR', balancePaise: 0 }), ledger: d.ledger.filter((x) => x.tenantId === tenantId).slice(-100).reverse(), invoices: d.invoices.filter((x) => x.tenantId === tenantId).map(publicInvoice), activities: d.clientActivities.filter((x) => x.tenantId === tenantId).slice(-100).reverse(), statusEvents: d.tenantStatusEvents.filter((x) => x.tenantId === tenantId).slice(-100).reverse() });
@@ -1500,7 +2296,26 @@ function apiAdminTenantDetail(req, res) {
 
 async function apiAdminImpersonate(req, res, ctx) {
   if (ctx.impersonator) return core.sendJson(res, 409, { error: 'nested impersonation is not allowed', code: 'nested_impersonation' });
-  const b = ctx.body || {}; const reason = String(b.reason || '').trim().slice(0, 240); const target = core.db().users.find((u) => u.id === String(b.userId || ''));
+  const b = ctx.body || {}; const reason = String(b.reason || '').trim().slice(0, 240); const targetId = String(b.userId || '');
+  if (!reason || !targetId) return core.sendJson(res, 422, { error: 'valid userId and reason required', code: 'bad_impersonation' });
+
+  if (db.isPostgres) {
+    const uRes = await db.query('SELECT * FROM users WHERE id = $1', [targetId]);
+    if (uRes.rowCount === 0) return core.sendJson(res, 422, { error: 'valid userId and reason required', code: 'bad_impersonation' });
+    const target = uRes.rows[0];
+    if (!core.verifyPassword(String(b.password || ''), ctx.user.passHash)) return core.sendJson(res, 401, { error: 'password re-authentication failed', code: 'reauth_failed' });
+    if (target.role === 'super_admin' || target.status !== 'active') return core.sendJson(res, 403, { error: 'that account cannot be impersonated', code: 'impersonation_forbidden' });
+    const tRes = await db.query('SELECT * FROM tenants WHERE id = $1', [target.tenantId]);
+    if (tRes.rowCount === 0 || tRes.rows[0].status !== 'active') return core.sendJson(res, 409, { error: 'target tenant is not active', code: 'target_inactive' });
+    const tenant = tRes.rows[0];
+    const token = await core.createImpersonationSession(ctx.user.id, target.id, tenant.id, reason);
+    await db.transaction(async (client) => {
+      await db.addAuditSql(client, ctx, 'admin.impersonation.started', 'user', target.id, { reason });
+    });
+    return core.send(res, 200, JSON.stringify({ ok: true, user: publicUser(target), tenant: publicTenant(tenant) }), { 'Content-Type': 'application/json', 'Set-Cookie': core.sessionCookie(token) });
+  }
+
+  const target = core.db().users.find((u) => u.id === targetId);
   if (!reason || !target) return core.sendJson(res, 422, { error: 'valid userId and reason required', code: 'bad_impersonation' });
   if (!core.verifyPassword(String(b.password || ''), ctx.user.passHash)) return core.sendJson(res, 401, { error: 'password re-authentication failed', code: 'reauth_failed' });
   if (target.role === 'super_admin' || target.status !== 'active') return core.sendJson(res, 403, { error: 'that account cannot be impersonated', code: 'impersonation_forbidden' });
@@ -1513,7 +2328,20 @@ async function apiAdminImpersonate(req, res, ctx) {
 
 async function apiImpersonationExit(req, res, ctx) {
   if (!ctx.impersonator) return core.sendJson(res, 409, { error: 'not impersonating', code: 'not_impersonating' });
-  const actor = ctx.impersonator; const tenant = core.db().tenants.find((t) => t.id === actor.tenantId); const token = await core.createSession(actor.id, actor.tenantId);
+  const actor = ctx.impersonator;
+
+  if (db.isPostgres) {
+    const tRes = await db.query('SELECT * FROM tenants WHERE id = $1', [actor.tenantId]);
+    const tenant = tRes.rows[0];
+    const token = await core.createSession(actor.id, actor.tenantId);
+    await db.transaction(async (client) => {
+      await db.addAuditSql(client, ctx, 'admin.impersonation.ended', 'user', ctx.user.id);
+    });
+    return core.send(res, 200, JSON.stringify({ ok: true, user: publicUser(actor), tenant: publicTenant(tenant) }), { 'Content-Type': 'application/json', 'Set-Cookie': core.sessionCookie(token) });
+  }
+
+  const tenant = core.db().tenants.find((t) => t.id === actor.tenantId);
+  const token = await core.createSession(actor.id, actor.tenantId);
   await core.mutate((d) => addAudit(d, ctx, 'admin.impersonation.ended', 'user', ctx.user.id));
   core.send(res, 200, JSON.stringify({ ok: true, user: publicUser(actor), tenant: publicTenant(tenant) }), { 'Content-Type': 'application/json', 'Set-Cookie': core.sessionCookie(token) });
 }
@@ -1523,7 +2351,36 @@ async function apiAdminTenantStatus(req, res, ctx) {
   const b = ctx.body || {};
   const status = String(b.status || '');
   if (!['onboarding', 'active', 'suspended', 'closed'].includes(status)) return core.sendJson(res, 422, { error: 'invalid status', code: 'bad_status' });
-  const tenant = core.db().tenants.find((t) => t.id === String(b.tenantId || ''));
+  const tenantId = String(b.tenantId || '');
+
+  if (db.isPostgres) {
+    const tRes = await db.query('SELECT * FROM tenants WHERE id = $1', [tenantId]);
+    if (tRes.rowCount === 0) return core.sendJson(res, 404, { error: 'tenant not found', code: 'not_found' });
+    const tenant = tRes.rows[0];
+    const now = new Date().toISOString();
+
+    await db.transaction(async (client) => {
+      await client.query('UPDATE tenants SET status = $1 WHERE id = $2', [status, tenantId]);
+      if (status !== 'active') {
+        await client.query('DELETE FROM sessions WHERE tenant_id = $1', [tenantId]);
+      }
+      await client.query(
+        `INSERT INTO tenant_status_events (id, tenant_id, from_status, to_status, reason, actor_user_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+        [core.genId('tse_'), tenantId, tenant.status || 'active', status, String(b.reason || '').trim().slice(0, 240), ctx.user.id, now]
+      );
+      await client.query(
+        `INSERT INTO client_activities (id, tenant_id, type, channel, visibility, summary, actor_user_id, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+        [core.genId('act_'), tenantId, status === 'closed' ? 'offboarded' : 'status_changed', 'internal', 'internal', `Client status changed from ${tenant.status || 'active'} to ${status}.`, ctx.user.id, now]
+      );
+      await db.addAuditSql(client, ctx, 'admin.tenant.status', 'tenant', tenantId, { status });
+    });
+
+    return core.sendJson(res, 200, { tenant: publicTenant({ ...tenant, status }) });
+  }
+
+  const tenant = core.db().tenants.find((t) => t.id === tenantId);
   if (!tenant) return core.sendJson(res, 404, { error: 'tenant not found', code: 'not_found' });
   await core.mutate((d) => {
     const now = new Date().toISOString();
@@ -1541,7 +2398,31 @@ async function apiAdminUserStatus(req, res, ctx) {
   const b = ctx.body || {};
   const status = String(b.status || '');
   if (!['active', 'suspended', 'deleted'].includes(status)) return core.sendJson(res, 422, { error: 'invalid status', code: 'bad_status' });
-  const user = core.db().users.find((u) => u.id === String(b.userId || ''));
+  const userId = String(b.userId || '');
+
+  if (db.isPostgres) {
+    const uRes = await db.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (uRes.rowCount === 0) return core.sendJson(res, 404, { error: 'user not found', code: 'not_found' });
+    const user = uRes.rows[0];
+    if (user.id === ctx.user.id) return core.sendJson(res, 409, { error: 'cannot change your own status', code: 'self_target' });
+
+    await db.transaction(async (client) => {
+      if (status === 'deleted') {
+        await client.query(
+          'UPDATE users SET status = $1, email = $2, name = $3, pass_hash = $4 WHERE id = $5',
+          [status, `deleted-${user.id}@invalid.local`, 'Deleted user', '', user.id]
+        );
+      } else {
+        await client.query('UPDATE users SET status = $1 WHERE id = $2', [status, user.id]);
+      }
+      await client.query('DELETE FROM sessions WHERE user_id = $1', [user.id]);
+      await db.addAuditSql(client, ctx, 'admin.user.status', 'user', user.id, { status });
+    });
+
+    return core.sendJson(res, 200, { ok: true });
+  }
+
+  const user = core.db().users.find((u) => u.id === userId);
   if (!user) return core.sendJson(res, 404, { error: 'user not found', code: 'not_found' });
   if (user.id === ctx.user.id) return core.sendJson(res, 409, { error: 'cannot change your own status', code: 'self_target' });
   await core.mutate((d) => { const u = d.users.find((x) => x.id === user.id); u.status = status; if (status === 'deleted') { u.email = `deleted-${u.id}@invalid.local`; u.name = 'Deleted user'; u.passHash = ''; } d.sessions = d.sessions.filter((s) => s.userId !== user.id); addAudit(d, ctx, 'admin.user.status', 'user', user.id, { status }); });
@@ -1553,7 +2434,23 @@ async function apiAdminUserRole(req, res, ctx) {
   const b = ctx.body || {};
   const role = String(b.role || '');
   if (!['super_admin', 'admin', 'owner', 'member'].includes(role)) return core.sendJson(res, 422, { error: 'invalid role', code: 'bad_role' });
-  const user = core.db().users.find((u) => u.id === String(b.userId || ''));
+  const userId = String(b.userId || '');
+
+  if (db.isPostgres) {
+    const uRes = await db.query('SELECT * FROM users WHERE id = $1', [userId]);
+    if (uRes.rowCount === 0) return core.sendJson(res, 404, { error: 'user not found', code: 'not_found' });
+    const user = uRes.rows[0];
+    if (user.id === ctx.user.id && role !== 'super_admin') return core.sendJson(res, 409, { error: 'cannot remove your own super admin role', code: 'self_target' });
+
+    await db.transaction(async (client) => {
+      await client.query('UPDATE users SET role = $1 WHERE id = $2', [role, user.id]);
+      await db.addAuditSql(client, ctx, 'admin.user.role', 'user', user.id, { role });
+    });
+
+    return core.sendJson(res, 200, { user: publicUser({ ...user, role }) });
+  }
+
+  const user = core.db().users.find((u) => u.id === userId);
   if (!user) return core.sendJson(res, 404, { error: 'user not found', code: 'not_found' });
   if (user.id === ctx.user.id && role !== 'super_admin') return core.sendJson(res, 409, { error: 'cannot remove your own super admin role', code: 'self_target' });
   await core.mutate((d) => { d.users.find((u) => u.id === user.id).role = role; addAudit(d, ctx, 'admin.user.role', 'user', user.id, { role }); });
@@ -1565,8 +2462,28 @@ async function apiAdminWalletAdjust(req, res, ctx) {
   const b = ctx.body || {};
   const amountPaise = Number(b.amountPaise);
   const tenantId = String(b.tenantId || '');
-  if (!core.db().tenants.some((t) => t.id === tenantId) || !Number.isInteger(amountPaise) || amountPaise === 0 || Math.abs(amountPaise) > 100000000) return core.sendJson(res, 422, { error: 'valid tenantId and amountPaise required', code: 'bad_adjustment' });
   const idempotencyKey = String(b.idempotencyKey || '').trim().slice(0, 120);
+
+  if (db.isPostgres) {
+    const tRes = await db.query('SELECT 1 FROM tenants WHERE id = $1', [tenantId]);
+    if (tRes.rowCount === 0 || !Number.isInteger(amountPaise) || amountPaise === 0 || Math.abs(amountPaise) > 100000000) return core.sendJson(res, 422, { error: 'valid tenantId and amountPaise required', code: 'bad_adjustment' });
+    if (!idempotencyKey) return core.sendJson(res, 422, { error: 'idempotencyKey required', code: 'idempotency_required' });
+    let entry;
+    try {
+      await db.transaction(async (client) => {
+        entry = await db.addLedgerEntrySql(client, tenantId, amountPaise, 'admin_adjustment', `admin:${idempotencyKey}`, ctx.user.id, { reason: String(b.reason || '').slice(0, 200) });
+        if (entry) {
+          await db.addAuditSql(client, ctx, 'admin.wallet.adjusted', 'tenant', tenantId, { amountPaise, ledgerId: entry.id });
+        }
+      });
+    } catch (e) {
+      return core.sendJson(res, 409, { error: e.message, code: 'wallet_rejected' });
+    }
+    if (!entry) return core.sendJson(res, 200, { duplicate: true });
+    return core.sendJson(res, 201, { ledgerEntry: entry });
+  }
+
+  if (!core.db().tenants.some((t) => t.id === tenantId) || !Number.isInteger(amountPaise) || amountPaise === 0 || Math.abs(amountPaise) > 100000000) return core.sendJson(res, 422, { error: 'valid tenantId and amountPaise required', code: 'bad_adjustment' });
   if (!idempotencyKey) return core.sendJson(res, 422, { error: 'idempotencyKey required', code: 'idempotency_required' });
   let entry;
   try { await core.mutate((d) => { entry = addLedgerEntry(d, tenantId, amountPaise, 'admin_adjustment', `admin:${idempotencyKey}`, ctx.user.id, { reason: String(b.reason || '').slice(0, 200) }); if (entry) addAudit(d, ctx, 'admin.wallet.adjusted', 'tenant', tenantId, { amountPaise, ledgerId: entry.id }); }); }
@@ -1577,8 +2494,30 @@ async function apiAdminWalletAdjust(req, res, ctx) {
 
 async function apiAdminTicketReply(req, res, ctx) {
   const b = ctx.body || {};
-  const ticket = core.db().supportTickets.find((t) => t.id === String(b.ticketId || ''));
+  const ticketId = String(b.ticketId || '');
   const text = String(b.message || '').trim().slice(0, 5000);
+
+  if (db.isPostgres) {
+    const tRes = await db.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
+    if (tRes.rowCount === 0 || !text) return core.sendJson(res, 422, { error: 'valid ticketId and message required', code: 'bad_reply' });
+    const ticket = tRes.rows[0];
+    const now = new Date().toISOString();
+    const newStatus = b.status === 'closed' ? 'closed' : 'waiting_on_customer';
+    const msg = { id: core.genId('msg_'), ticketId: ticket.id, tenantId: ticket.tenantId, authorUserId: ctx.user.id, body: text, internal: !!b.internal, createdAt: now };
+
+    await db.transaction(async (client) => {
+      await client.query('UPDATE support_tickets SET status = $1, updated_at = $2 WHERE id = $3', [newStatus, now, ticket.id]);
+      await client.query(
+        'INSERT INTO support_messages (id, ticket_id, user_id, body, created_at) VALUES ($1, $2, $3, $4, $5)',
+        [msg.id, ticket.id, ctx.user.id, text, now]
+      );
+      await db.addAuditSql(client, ctx, 'admin.ticket.replied', 'ticket', ticket.id, { status: newStatus });
+    });
+
+    return core.sendJson(res, 201, { message: msg });
+  }
+
+  const ticket = core.db().supportTickets.find((t) => t.id === ticketId);
   if (!ticket || !text) return core.sendJson(res, 422, { error: 'valid ticketId and message required', code: 'bad_reply' });
   const msg = { id: core.genId('msg_'), ticketId: ticket.id, tenantId: ticket.tenantId, authorUserId: ctx.user.id, body: text, internal: !!b.internal, createdAt: new Date().toISOString() };
   await core.mutate((d) => { d.supportMessages.push(msg); const t = d.supportTickets.find((x) => x.id === ticket.id); t.status = b.status === 'closed' ? 'closed' : 'waiting_on_customer'; t.updatedAt = msg.createdAt; addAudit(d, ctx, 'admin.ticket.replied', 'ticket', ticket.id, { status: t.status }); });
@@ -1586,7 +2525,29 @@ async function apiAdminTicketReply(req, res, ctx) {
 }
 
 async function apiAdminTicketUpdate(req, res, ctx) {
-  const b = ctx.body || {}; const ticket = core.db().supportTickets.find((t) => t.id === String(b.ticketId || ''));
+  const b = ctx.body || {}; const ticketId = String(b.ticketId || '');
+
+  if (db.isPostgres) {
+    const tRes = await db.query('SELECT * FROM support_tickets WHERE id = $1', [ticketId]);
+    if (tRes.rowCount === 0) return core.sendJson(res, 404, { error: 'ticket not found', code: 'not_found' });
+    const ticket = tRes.rows[0];
+    const status = ['open', 'in_progress', 'waiting_on_customer', 'resolved', 'closed'].includes(String(b.status || '')) ? String(b.status) : ticket.status;
+    const priority = ['low', 'normal', 'high', 'urgent'].includes(String(b.priority || '')) ? String(b.priority) : ticket.priority;
+    const assignedTo = b.assignedTo ? String(b.assignedTo) : ticket.assignedTo || ctx.user.id;
+    const now = new Date().toISOString();
+
+    await db.transaction(async (client) => {
+      await client.query(
+        'UPDATE support_tickets SET status = $1, priority = $2, assigned_to = $3, updated_at = $4 WHERE id = $5',
+        [status, priority, assignedTo, now, ticket.id]
+      );
+      await db.addAuditSql(client, ctx, 'admin.ticket.updated', 'ticket', ticket.id, { status, priority, assignedTo });
+    });
+
+    return core.sendJson(res, 200, { ok: true });
+  }
+
+  const ticket = core.db().supportTickets.find((t) => t.id === ticketId);
   if (!ticket) return core.sendJson(res, 404, { error: 'ticket not found', code: 'not_found' });
   const status = ['open', 'in_progress', 'waiting_on_customer', 'resolved', 'closed'].includes(String(b.status || '')) ? String(b.status) : ticket.status;
   const priority = ['low', 'normal', 'high', 'urgent'].includes(String(b.priority || '')) ? String(b.priority) : ticket.priority;
