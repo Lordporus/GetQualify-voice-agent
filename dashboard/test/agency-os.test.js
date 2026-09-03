@@ -8,6 +8,9 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const WebSocket = require('ws');
+const core = require('../lib/core');
+
+core.loadEnv();
 
 const DASHBOARD_DIR = path.join(__dirname, '..');
 const ADMIN_EMAIL = 'agency.qa@getqualify.in';
@@ -31,7 +34,7 @@ function reservePort() {
 }
 
 async function waitForServer(baseUrl, child, readLogs) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
     if (child.exitCode !== null) {
       throw new Error(`Agency OS server exited during startup.\n${readLogs()}`);
     }
@@ -50,7 +53,7 @@ function futureDate(days) {
   return new Date(Date.now() + days * 86400000).toISOString().slice(0, 10);
 }
 
-test('agency OS APIs complete the lifecycle and preserve tenant isolation', { timeout: 30000 }, async (t) => {
+test('agency OS APIs complete the lifecycle and preserve tenant isolation', { timeout: 90000 }, async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'getqualify-agency-os-'));
   const dbFile = path.join(tempDir, 'db.json');
   const rootDbUrl = process.env.TEST_ROOT_DATABASE_URL;

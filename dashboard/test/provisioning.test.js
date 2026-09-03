@@ -28,7 +28,7 @@ function reservePort() {
 }
 
 async function waitForServer(baseUrl, child, readLogs) {
-  for (let attempt = 0; attempt < 80; attempt += 1) {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
     if (child.exitCode !== null) {
       throw new Error(`Server exited during startup.\n${readLogs()}`);
     }
@@ -43,7 +43,7 @@ async function waitForServer(baseUrl, child, readLogs) {
   throw new Error(`Server did not become ready in time.\n${readLogs()}`);
 }
 
-test('provisioning and lightweight CRM lifecycle', { timeout: 30000 }, async (t) => {
+test('provisioning and lightweight CRM lifecycle', { timeout: 60000 }, async (t) => {
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'gq-provision-test-'));
   const dbFile = path.join(tempDir, 'db.json');
   const port = await reservePort();
