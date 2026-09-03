@@ -17,6 +17,7 @@ const http = require('http');
 const net = require('net');
 const fs = require('fs');
 const path = require('path');
+const crypto = require('crypto');
 const { WebSocketServer, WebSocket } = require('ws');
 
 const core = require('./lib/core');
@@ -475,9 +476,10 @@ async function apiSignup(req, res, body) {
 
   // Session creation stays on core.js path (not migrated in this group).
   const token = await core.createSession(userId, tenantId);
+  const csrfToken = core.generateCsrfToken();
   core.send(res, 200, JSON.stringify({ user: publicUser(user), tenant: publicTenant(tenant) }), {
     'Content-Type': 'application/json',
-    'Set-Cookie': core.sessionCookie(token),
+    'Set-Cookie': core.authCookies(token, csrfToken),
   });
 }
 
@@ -515,9 +517,10 @@ async function apiLogin(req, res, body) {
   }
 
   const token = await core.createSession(user.id, user.tenantId);
+  const csrfToken = core.generateCsrfToken();
   core.send(res, 200, JSON.stringify({ user: publicUser(user), tenant: publicTenant(tenant) }), {
     'Content-Type': 'application/json',
-    'Set-Cookie': core.sessionCookie(token),
+    'Set-Cookie': core.authCookies(token, csrfToken),
   });
 }
 
@@ -525,7 +528,7 @@ async function apiLogout(req, res) {
   await core.destroySession(req);
   core.send(res, 200, JSON.stringify({ ok: true }), {
     'Content-Type': 'application/json',
-    'Set-Cookie': core.clearCookie(),
+    'Set-Cookie': core.clearAuthCookies(),
   });
 }
 
@@ -3319,10 +3322,11 @@ async function apiAdminImpersonate(req, res, ctx) {
     if (tRes.rowCount === 0 || tRes.rows[0].status !== 'active') return core.sendJson(res, 409, { error: 'target tenant is not active', code: 'target_inactive' });
     const tenant = tRes.rows[0];
     const token = await core.createImpersonationSession(ctx.user.id, target.id, tenant.id, reason);
+    const csrfToken = core.generateCsrfToken();
     await db.transaction(async (client) => {
       await db.addAuditSql(client, ctx, 'admin.impersonation.started', 'user', target.id, { reason });
     });
-    return core.send(res, 200, JSON.stringify({ ok: true, user: publicUser(target), tenant: publicTenant(tenant) }), { 'Content-Type': 'application/json', 'Set-Cookie': core.sessionCookie(token) });
+    return core.send(res, 200, JSON.stringify({ ok: true, user: publicUser(target), tenant: publicTenant(tenant) }), { 'Content-Type': 'application/json', 'Set-Cookie': core.authCookies(token, csrfToken) });
   }
 
   const target = core.db().users.find((u) => u.id === targetId);
@@ -3332,8 +3336,9 @@ async function apiAdminImpersonate(req, res, ctx) {
   const tenant = core.db().tenants.find((t) => t.id === target.tenantId);
   if (!tenant || tenant.status !== 'active') return core.sendJson(res, 409, { error: 'target tenant is not active', code: 'target_inactive' });
   const token = await core.createImpersonationSession(ctx.user.id, target.id, tenant.id, reason);
+  const csrfToken = core.generateCsrfToken();
   await core.mutate((d) => addAudit(d, ctx, 'admin.impersonation.started', 'user', target.id, { reason }));
-  core.send(res, 200, JSON.stringify({ ok: true, user: publicUser(target), tenant: publicTenant(tenant) }), { 'Content-Type': 'application/json', 'Set-Cookie': core.sessionCookie(token) });
+  core.send(res, 200, JSON.stringify({ ok: true, user: publicUser(target), tenant: publicTenant(tenant) }), { 'Content-Type': 'application/json', 'Set-Cookie': core.authCookies(token, csrfToken) });
 }
 
 async function apiImpersonationExit(req, res, ctx) {
@@ -3344,16 +3349,18 @@ async function apiImpersonationExit(req, res, ctx) {
     const tRes = await db.query('SELECT * FROM tenants WHERE id = $1', [actor.tenantId]);
     const tenant = tRes.rows[0];
     const token = await core.createSession(actor.id, actor.tenantId);
+    const csrfToken = core.generateCsrfToken();
     await db.transaction(async (client) => {
       await db.addAuditSql(client, ctx, 'admin.impersonation.ended', 'user', ctx.user.id);
     });
-    return core.send(res, 200, JSON.stringify({ ok: true, user: publicUser(actor), tenant: publicTenant(tenant) }), { 'Content-Type': 'application/json', 'Set-Cookie': core.sessionCookie(token) });
+    return core.send(res, 200, JSON.stringify({ ok: true, user: publicUser(actor), tenant: publicTenant(tenant) }), { 'Content-Type': 'application/json', 'Set-Cookie': core.authCookies(token, csrfToken) });
   }
 
   const tenant = core.db().tenants.find((t) => t.id === actor.tenantId);
   const token = await core.createSession(actor.id, actor.tenantId);
+  const csrfToken = core.generateCsrfToken();
   await core.mutate((d) => addAudit(d, ctx, 'admin.impersonation.ended', 'user', ctx.user.id));
-  core.send(res, 200, JSON.stringify({ ok: true, user: publicUser(actor), tenant: publicTenant(tenant) }), { 'Content-Type': 'application/json', 'Set-Cookie': core.sessionCookie(token) });
+  core.send(res, 200, JSON.stringify({ ok: true, user: publicUser(actor), tenant: publicTenant(tenant) }), { 'Content-Type': 'application/json', 'Set-Cookie': core.authCookies(token, csrfToken) });
 }
 
 async function apiAdminTenantStatus(req, res, ctx) {
@@ -3623,6 +3630,13 @@ function handleProviderError(res, e) {
    ========================================================================== */
 
 const server = http.createServer(async (req, res) => {
+  const requestId = req.headers['x-request-id'] || crypto.randomUUID();
+  req.requestId = requestId;
+  res.setHeader('X-Request-Id', requestId);
+  if (Sentry && typeof Sentry.setTag === 'function') {
+    Sentry.setTag('requestId', requestId);
+  }
+
   const ip = requestRateKey(req);
   const route = (req.url || '/').split('?')[0];
 
@@ -3639,6 +3653,18 @@ const server = http.createServer(async (req, res) => {
       const requestContentType = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
       if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method || '') && !payuInbound && requestContentType && requestContentType !== 'application/json') {
         return core.sendJson(res, 415, { error: 'application/json required', code: 'bad_content_type' });
+      }
+
+      // CSRF validation for mutating endpoints (Double-Submit Cookie)
+      const isMutating = !['GET', 'HEAD', 'OPTIONS'].includes(req.method || '');
+      const isPublicAuth = route === '/api/auth/login' || route === '/api/auth/signup';
+      const isPublicDemo = route.startsWith('/api/public/demo/');
+      const isCsrfExempt = webhookInbound || isPublicAuth || isPublicDemo;
+
+      if (isMutating && !isCsrfExempt) {
+        if (!core.verifyCsrf(req)) {
+          return core.sendJson(res, 403, { error: 'invalid or missing CSRF token', code: 'bad_csrf' });
+        }
       }
 
       if ((route === '/api/payu/callback' || route === '/api/payu/webhook' || route === '/api/payu/return') && req.method === 'POST') {
@@ -3822,7 +3848,17 @@ const server = http.createServer(async (req, res) => {
     // Everything else is a static file from public/.
     core.serveStatic(req, res);
   } catch (e) {
-    if (Sentry) Sentry.captureException(e);
+    if (Sentry && typeof Sentry.captureException === 'function') {
+      Sentry.captureException(e, {
+        tags: { requestId: req.requestId, route, method: req.method },
+        extra: { ip },
+      });
+    }
+    console.error(`[${req.requestId || 'unknown'}] route dispatch crashed`, {
+      method: req.method,
+      route,
+      error: (e && e.stack) || String(e),
+    });
     core.sendJson(res, 500, { error: String((e && e.message) || e), code: 'server' });
   }
 });

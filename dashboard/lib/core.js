@@ -61,7 +61,9 @@ const BASE_HEADERS = {
 
 function send(res, status, body, headers = {}) {
   if (res.headersSent) return;
-  res.writeHead(status, { ...BASE_HEADERS, ...headers });
+  const reqId = res.getHeader && res.getHeader('x-request-id');
+  const reqIdHeader = reqId ? { 'X-Request-Id': reqId } : {};
+  res.writeHead(status, { ...BASE_HEADERS, ...reqIdHeader, ...headers });
   res.end(body);
 }
 
@@ -370,11 +372,21 @@ async function createImpersonationSession(actorUserId, targetUserId, targetTenan
   return token;
 }
 
+// CSRF cookie name (double-submit cookie pattern)
+const CSRF_COOKIE_NAME = 'csrf_token';
+
 // Build the Set-Cookie header value for a fresh session.
 function sessionCookie(token) {
   const maxAge = Math.floor(SESSION_TTL_MS / 1000);
   const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
   return `${COOKIE_NAME}=${token}; HttpOnly; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
+}
+
+// Build the Set-Cookie header value for a fresh CSRF token (not HttpOnly so JS can read it).
+function csrfCookie(csrfToken) {
+  const maxAge = Math.floor(SESSION_TTL_MS / 1000);
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  return `${CSRF_COOKIE_NAME}=${csrfToken}; Path=/; Max-Age=${maxAge}; SameSite=Lax${secure}`;
 }
 
 // Build the Set-Cookie header value that clears the session.
@@ -383,10 +395,57 @@ function clearCookie() {
   return `${COOKIE_NAME}=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax${secure}`;
 }
 
+// Build the Set-Cookie header value that clears the CSRF token.
+function clearCsrfCookie() {
+  const secure = process.env.NODE_ENV === 'production' ? '; Secure' : '';
+  return `${CSRF_COOKIE_NAME}=; Path=/; Max-Age=0; SameSite=Lax${secure}`;
+}
+
+// Set-Cookie arrays for login / logout
+function authCookies(token, csrfToken) {
+  return [sessionCookie(token), csrfCookie(csrfToken)];
+}
+
+function clearAuthCookies() {
+  return [clearCookie(), clearCsrfCookie()];
+}
+
+function generateCsrfToken() {
+  return crypto.randomBytes(32).toString('hex');
+}
+
+// Parse request cookies into a key-value dictionary.
+function parseCookies(req) {
+  const raw = (req && req.headers && req.headers.cookie) || '';
+  const out = {};
+  for (const part of raw.split(/[;,]/)) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const k = part.slice(0, idx).trim();
+    out[k] = part.slice(idx + 1).trim();
+  }
+  return out;
+}
+
+// Timing-safe verification of double-submit CSRF token.
+function verifyCsrf(req) {
+  const cookies = parseCookies(req);
+  const cookieToken = cookies[CSRF_COOKIE_NAME] || cookies.getqualify_csrf;
+  const headerToken = req && req.headers && (req.headers['x-csrf-token'] || req.headers['X-CSRF-Token']);
+  if (!cookieToken || !headerToken) return false;
+  if (typeof cookieToken !== 'string' || typeof headerToken !== 'string') return false;
+  if (cookieToken.length !== headerToken.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(cookieToken), Buffer.from(headerToken));
+  } catch (_) {
+    return false;
+  }
+}
+
 // Parse the request cookie header for our session token.
 function parseCookieToken(req) {
   const raw = req.headers.cookie || '';
-  for (const part of raw.split(';')) {
+  for (const part of raw.split(/[;,]/)) {
     const idx = part.indexOf('=');
     if (idx === -1) continue;
     const k = part.slice(0, idx).trim();
@@ -576,6 +635,7 @@ module.exports = {
   hashPassword, verifyPassword,
   createSession, createImpersonationSession, destroySession, getSession, requireAuth, requireRole, hasRole,
   sessionCookie, clearCookie, COOKIE_NAME,
+  CSRF_COOKIE_NAME, csrfCookie, clearCsrfCookie, authCookies, clearAuthCookies, generateCsrfToken, parseCookies, verifyCsrf,
   rateOk,
   serveStatic, MIME,
   genId,

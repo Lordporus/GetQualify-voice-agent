@@ -116,6 +116,11 @@ test('agency OS APIs complete the lifecycle and preserve tenant isolation', { ti
   async function request(cookie, pathname, options = {}) {
     const headers = { ...(options.headers || {}) };
     if (cookie) headers.Cookie = cookie;
+    const method = (options.method || 'GET').toUpperCase();
+    if (!['GET', 'HEAD', 'OPTIONS'].includes(method) && !headers['X-CSRF-Token']) {
+      const csrfMatch = (headers.Cookie || '').match(/(?:^|;\s*)csrf_token=([a-f0-9]{64})/);
+      if (csrfMatch) headers['X-CSRF-Token'] = csrfMatch[1];
+    }
     let body = options.body;
     if (body !== undefined && typeof body !== 'string') {
       headers['Content-Type'] = 'application/json';
@@ -138,9 +143,10 @@ test('agency OS APIs complete the lifecycle and preserve tenant isolation', { ti
       body: { email, password },
     });
     assert.equal(result.response.status, 200, result.json.error);
-    const setCookie = result.response.headers.get('set-cookie');
-    assert.match(setCookie || '', /^rxv_sess=[a-f0-9]{64};/);
-    return { ...result.json, cookie: setCookie.split(';')[0] };
+    const setCookie = result.response.headers.get('set-cookie') || '';
+    assert.match(setCookie, /rxv_sess=[a-f0-9]{64};/);
+    const cookiePairs = setCookie.split(',').map((c) => c.trim().split(';')[0]).filter(Boolean).join('; ');
+    return { ...result.json, cookie: cookiePairs };
   }
 
   const admin = await login(ADMIN_EMAIL, ADMIN_PASSWORD);

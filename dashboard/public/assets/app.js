@@ -66,6 +66,13 @@ const RATE = { mulberry: 0.50, muga: 0.99 };
 async function api(path, opts) {
   opts = opts || {};
   const init = { method: opts.method || 'GET', credentials: 'include', headers: {} };
+  const method = (opts.method || 'GET').toUpperCase();
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(method)) {
+    const match = document.cookie.match(/(?:^|;\s*)(?:csrf_token|getqualify_csrf)=([^;]*)/);
+    if (match) {
+      init.headers['X-CSRF-Token'] = decodeURIComponent(match[1]);
+    }
+  }
   const controller = new AbortController();
   const timeoutMs = Number.isFinite(opts.timeoutMs) ? opts.timeoutMs : 35000;
   const timeout = setTimeout(() => controller.abort(), timeoutMs);

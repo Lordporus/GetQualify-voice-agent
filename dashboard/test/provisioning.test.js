@@ -92,11 +92,12 @@ test('provisioning and lightweight CRM lifecycle', { timeout: 60000 }, async (t)
   assert.equal(loginRes.status, 200);
   const adminCookie = loginRes.headers.get('set-cookie');
   assert.ok(adminCookie, 'Expected session cookie on login');
+  const adminCsrf = (adminCookie.match(/csrf_token=([a-f0-9]{64})/) || [])[1] || '';
 
   // 2. Unknown industry template -> 422
   const badIndustryRes = await fetch(`${baseUrl}/api/admin/tenants/provision`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: adminCookie },
+    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: adminCookie, 'X-CSRF-Token': adminCsrf },
     body: JSON.stringify({
       name: 'Acme Mining',
       ownerEmail: 'acme.owner@mining.test',
@@ -111,7 +112,7 @@ test('provisioning and lightweight CRM lifecycle', { timeout: 60000 }, async (t)
   // 3. Provision new tenant with industry: 'dental' -> 201 creates all 5 entities
   const provisionRes = await fetch(`${baseUrl}/api/admin/tenants/provision`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: adminCookie },
+    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: adminCookie, 'X-CSRF-Token': adminCsrf },
     body: JSON.stringify({
       name: 'Smile Care Dental',
       ownerEmail: 'dr.smith@smilecare.test',
@@ -135,10 +136,10 @@ test('provisioning and lightweight CRM lifecycle', { timeout: 60000 }, async (t)
 
   const newTenantId = provisionData.tenant.id;
 
-  // 4. Duplicate email -> 409
+  // 4. Duplicate owner email -> 409
   const dupEmailRes = await fetch(`${baseUrl}/api/admin/tenants/provision`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: adminCookie },
+    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: adminCookie, 'X-CSRF-Token': adminCsrf },
     body: JSON.stringify({
       name: 'Another Clinic',
       ownerEmail: 'dr.smith@smilecare.test',
@@ -161,7 +162,7 @@ test('provisioning and lightweight CRM lifecycle', { timeout: 60000 }, async (t)
 
   const settingsPatchRes = await fetch(`${baseUrl}/api/admin/tenants/${newTenantId}/settings`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: adminCookie },
+    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: adminCookie, 'X-CSRF-Token': adminCsrf },
     body: JSON.stringify({
       knowledgeBase: 'We accept Delta Dental and MetLife.',
     }),
@@ -179,11 +180,12 @@ test('provisioning and lightweight CRM lifecycle', { timeout: 60000 }, async (t)
   assert.equal(clientLoginRes.status, 200);
   const clientCookie = clientLoginRes.headers.get('set-cookie');
   assert.ok(clientCookie);
+  const clientCsrf = (clientCookie.match(/csrf_token=([a-f0-9]{64})/) || [])[1] || '';
 
   // 7. Save HVAC job -> auto-creates lead
   const hvacJobRes = await fetch(`${baseUrl}/api/hvac/jobs`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: clientCookie },
+    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: clientCookie, 'X-CSRF-Token': clientCsrf },
     body: JSON.stringify({
       callerName: 'Patient Alice',
       phone: '+15551234567',
@@ -212,10 +214,10 @@ test('provisioning and lightweight CRM lifecycle', { timeout: 60000 }, async (t)
   assert.equal(leadsListData.leads[0].name, 'Patient Alice');
   assert.equal(leadsListData.leads[0].phone, '+15551234567');
 
-  // 9. Save another job with same phone -> updates lead, no duplicate lead record
+  // 9. Save another job with same phone -> updates lead, doesn't duplicate
   const secondJobRes = await fetch(`${baseUrl}/api/hvac/jobs`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: clientCookie },
+    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: clientCookie, 'X-CSRF-Token': clientCsrf },
     body: JSON.stringify({
       callerName: 'Alice Updated',
       phone: '+15551234567',
@@ -245,10 +247,10 @@ test('provisioning and lightweight CRM lifecycle', { timeout: 60000 }, async (t)
   assert.ok(Array.isArray(leadGetData.hvacJobs));
   assert.equal(leadGetData.hvacJobs.length, 2);
 
-  // 11. PATCH /api/leads/:id updates fields
+  // 11. PATCH /api/leads/:id  // 12. Patch lead status
   const patchRes = await fetch(`${baseUrl}/api/leads/${leadId}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: clientCookie },
+    headers: { 'Content-Type': 'application/json', Origin: baseUrl, Cookie: clientCookie, 'X-CSRF-Token': clientCsrf },
     body: JSON.stringify({ notes: 'VIP Patient', assignedTo: 'Dr. Smith' }),
   });
   assert.equal(patchRes.status, 200);
@@ -256,10 +258,10 @@ test('provisioning and lightweight CRM lifecycle', { timeout: 60000 }, async (t)
   assert.equal(patchData.lead.notes, 'VIP Patient');
   assert.equal(patchData.lead.assignedTo, 'Dr. Smith');
 
-  // 12. DELETE /api/leads/:id soft deletes
+  // 12. DELETE /api/leads/:id  // 13. Delete lead
   const deleteRes = await fetch(`${baseUrl}/api/leads/${leadId}`, {
     method: 'DELETE',
-    headers: { Origin: baseUrl, Cookie: clientCookie },
+    headers: { Origin: baseUrl, Cookie: clientCookie, 'X-CSRF-Token': clientCsrf },
   });
   assert.equal(deleteRes.status, 200);
   const deleteData = await deleteRes.json();
