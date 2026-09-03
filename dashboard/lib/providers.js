@@ -488,16 +488,31 @@ const telVobiz = {
   // is the sole confirm guard, and this method makes exactly one initiate call.
   async dial(rawNumber, options = {}) {
     if (!hasEnv(this.needs)) throw notConfigured(this.label, this.needs);
-    let num = String(rawNumber || '').replace(/[^0-9]/g, '');
-    if (num.length === 12 && num.startsWith('91')) num = num.slice(2);
-    if (num.length !== 10) {
-      throw new ProviderError('need a 10-digit Indian mobile (national format)', 422, 'bad_number');
+    let clean = String(rawNumber || '').trim();
+    let num;
+    if (clean.startsWith('+')) {
+      // E.164 format supplied: keep leading +, strip whitespace and formatting characters
+      const digits = clean.slice(1).replace(/[^0-9]/g, '');
+      if (digits.length < 7 || digits.length > 15) {
+        throw new ProviderError('invalid E.164 number (must be 7-15 digits after +)', 422, 'bad_number');
+      }
+      num = '+' + digits;
+    } else {
+      // National / bare format: assume India (+91)
+      const digits = clean.replace(/[^0-9]/g, '');
+      let stripped = digits;
+      if (stripped.length === 12 && stripped.startsWith('91')) stripped = stripped.slice(2);
+      else if (stripped.length === 11 && stripped.startsWith('0')) stripped = stripped.slice(1);
+      if (stripped.length !== 10) {
+        throw new ProviderError('supply a 10-digit Indian number or E.164 format (e.g. +14155552671)', 422, 'bad_number');
+      }
+      num = '+91' + stripped;
     }
     const result = await this.request('POST', '/api/v1/telephony/initiate-call', {
       workflow_id: Number.isInteger(options.workflowId) && options.workflowId > 0 ? options.workflowId : positiveIntEnv('DOGRAH_WORKFLOW_ID'),
       telephony_configuration_id: positiveIntEnv('DOGRAH_TELEPHONY_CONFIG_ID'),
-      from_phone_number_id: positiveIntEnv('DOGRAH_PHONE_NUMBER_ID'),
-      phone_number: '+91' + num,
+      from_phone_number_id: Number.isInteger(options.fromPhoneNumberId) && options.fromPhoneNumberId > 0 ? options.fromPhoneNumberId : positiveIntEnv('DOGRAH_PHONE_NUMBER_ID'),
+      phone_number: num,
     });
     if (result.up.status < 200 || result.up.status >= 300) {
       throw new ProviderError('Dograh could not initiate the VoBiz call', upstreamStatus(result.up.status),

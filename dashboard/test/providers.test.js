@@ -200,3 +200,104 @@ test('Deepgram transcription remains the only mocked STT network path', async ()
   assert.equal(output.provider, 'deepgram');
   assert.equal(output.text, 'hello');
 });
+
+test('telephony dial accepts E.164 international numbers and preserves backwards compatibility for Indian numbers', async () => {
+  resetEnv({
+    DOGRAH_BASE_URL: 'https://dograh.test',
+    DOGRAH_API_KEY: 'dograh-test',
+    DOGRAH_WORKFLOW_ID: '123',
+    DOGRAH_TELEPHONY_CONFIG_ID: '456',
+    DOGRAH_PHONE_NUMBER_ID: '789',
+  });
+  let request;
+  const providers = loadProviders(async (host, path, headers, body) => {
+    request = { host, path, headers, payload: JSON.parse(body.toString('utf8')) };
+    return {
+      status: 200,
+      headers: {},
+      buffer: Buffer.from(JSON.stringify({ call_id: 'call_123', status: 'initiated' })),
+    };
+  });
+
+  // US E.164
+  await providers.telephony.dial('+14155552671');
+  assert.equal(request.host, 'dograh.test');
+  assert.equal(request.path, '/api/v1/telephony/initiate-call');
+  assert.equal(request.payload.phone_number, '+14155552671');
+  assert.equal(request.payload.workflow_id, 123);
+  assert.equal(request.payload.telephony_configuration_id, 456);
+  assert.equal(request.payload.from_phone_number_id, 789);
+
+  // UK E.164 with spaces and dashes
+  await providers.telephony.dial('+44 (791) 112-3456');
+  assert.equal(request.payload.phone_number, '+447911123456');
+
+  // Bare Indian 10-digit number
+  await providers.telephony.dial('9876543210');
+  assert.equal(request.payload.phone_number, '+919876543210');
+
+  // Indian number with 91 prefix and no leading +
+  await providers.telephony.dial('919876543210');
+  assert.equal(request.payload.phone_number, '+919876543210');
+
+  // Indian number with trunk 0
+  await providers.telephony.dial('09876543210');
+  assert.equal(request.payload.phone_number, '+919876543210');
+
+  // Custom workflowId and fromPhoneNumberId options
+  await providers.telephony.dial('+14155552671', { workflowId: 999, fromPhoneNumberId: 888 });
+  assert.equal(request.payload.workflow_id, 999);
+  assert.equal(request.payload.from_phone_number_id, 888);
+});
+
+test('telephony dial rejects invalid and malformed phone numbers with 422 bad_number', async () => {
+  resetEnv({
+    DOGRAH_BASE_URL: 'https://dograh.test',
+    DOGRAH_API_KEY: 'dograh-test',
+    DOGRAH_WORKFLOW_ID: '123',
+    DOGRAH_TELEPHONY_CONFIG_ID: '456',
+    DOGRAH_PHONE_NUMBER_ID: '789',
+  });
+  const providers = loadProviders();
+
+  // Non-numeric input
+  await assert.rejects(
+    () => providers.telephony.dial('abc'),
+    (err) => err.status === 422 && err.code === 'bad_number',
+  );
+
+  // Empty string
+  await assert.rejects(
+    () => providers.telephony.dial(''),
+    (err) => err.status === 422 && err.code === 'bad_number',
+  );
+
+  // Null
+  await assert.rejects(
+    () => providers.telephony.dial(null),
+    (err) => err.status === 422 && err.code === 'bad_number',
+  );
+
+  // E.164 too short (< 7 digits after +)
+  await assert.rejects(
+    () => providers.telephony.dial('+12345'),
+    (err) => err.status === 422 && err.code === 'bad_number',
+  );
+
+  // E.164 too long (> 15 digits after +)
+  await assert.rejects(
+    () => providers.telephony.dial('+1234567890123456'),
+    (err) => err.status === 422 && err.code === 'bad_number',
+  );
+
+  // Bare number wrong length
+  await assert.rejects(
+    () => providers.telephony.dial('12345'),
+    (err) => err.status === 422 && err.code === 'bad_number',
+  );
+  await assert.rejects(
+    () => providers.telephony.dial('1234567890123'),
+    (err) => err.status === 422 && err.code === 'bad_number',
+  );
+});
+

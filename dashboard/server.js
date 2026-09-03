@@ -1401,6 +1401,8 @@ async function apiTelephonyStatus(req, res) {
 }
 
 // POST /api/telephony/dial -> places a REAL paid call. GUARDED behind confirm.
+// Body: { number: string, confirm: true }
+// Accepts standard E.164 format (e.g. +14155552671, +447911123456) or bare 10-digit Indian mobile.
 async function apiTelephonyDial(req, res, ctx) {
   const b = ctx.body || {};
   if (b.confirm !== true) {
