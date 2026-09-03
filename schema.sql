@@ -345,3 +345,23 @@ CREATE TABLE client_activities (
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX idx_client_activities_tenant ON client_activities(tenant_id);
+
+CREATE TABLE leads (
+  id           TEXT PRIMARY KEY,
+  tenant_id    TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  name         TEXT,
+  phone        TEXT,
+  email        TEXT,
+  source       TEXT DEFAULT 'inbound_call',
+  status       TEXT DEFAULT 'new',
+  notes        TEXT DEFAULT '',
+  assigned_to  TEXT,
+  created_at   TIMESTAMPTZ DEFAULT NOW(),
+  updated_at   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX idx_leads_tenant ON leads(tenant_id);
+CREATE UNIQUE INDEX idx_leads_phone ON leads(tenant_id, phone);
+
+ALTER TABLE calls     ADD COLUMN lead_id TEXT REFERENCES leads(id) ON DELETE SET NULL;
+ALTER TABLE hvac_jobs ADD COLUMN lead_id TEXT REFERENCES leads(id) ON DELETE SET NULL;
+

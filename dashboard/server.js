@@ -535,6 +535,7 @@ function publicHvacJob(job) {
     assignedTo: job.assignedTo || job.assigned_to || '',
     notes: job.notes || '',
     appointment: job.appointment || null,
+    leadId: job.leadId || job.lead_id || null,
     createdAt: toIso(job.createdAt || job.created_at),
     updatedAt: toIso(job.updatedAt || job.updated_at),
   };
@@ -564,35 +565,57 @@ async function apiHvacSlots(req, res) {
   } catch (e) { handleProviderError(res, e); }
 }
 async function apiHvacJobSave(req, res, ctx) {
-  const b = ctx.body || {}; const callerName = String(b.callerName || '').trim().slice(0, 100); const phone = String(b.phone || '').trim().slice(0, 32);
+  const b = ctx.body || {};
+  const callerName = String(b.callerName || '').trim().slice(0, 100);
+  const phone = String(b.phone || '').trim().slice(0, 32);
   if (!callerName || !phone) return core.sendJson(res, 422, { error: 'caller name and phone are required', code: 'missing_contact' });
-  const outcome = HVAC_OUTCOMES.has(b.outcome) ? b.outcome : 'new'; const now = new Date().toISOString(); let job;
+  const outcome = HVAC_OUTCOMES.has(b.outcome) ? b.outcome : 'new';
+  const email = String(b.email || '').trim().slice(0, 180);
+  const service = String(b.service || 'General HVAC').trim().slice(0, 80);
+  const urgency = String(b.urgency || 'normal').trim().slice(0, 30);
+  const assignedTo = String(b.assignedTo || '').trim().slice(0, 80);
+  const notes = String(b.notes || '').trim().slice(0, 2000);
+  const now = new Date().toISOString();
+  let job;
 
   if (db.isPostgres) {
     const jobId = b.id ? String(b.id) : core.genId('hvac_');
     const existing = b.id ? await db.query('SELECT * FROM hvac_jobs WHERE id = $1 AND tenant_id = $2', [jobId, ctx.tenant.id]) : { rowCount: 0 };
-    const email = String(b.email || '').trim().slice(0, 180);
-    const service = String(b.service || 'General HVAC').trim().slice(0, 80);
-    const urgency = String(b.urgency || 'normal').trim().slice(0, 30);
-    const assignedTo = String(b.assignedTo || '').trim().slice(0, 80);
-    const notes = String(b.notes || '').trim().slice(0, 2000);
 
     await db.transaction(async (client) => {
+      let leadId = null;
+      if (phone) {
+        const leadRes = await client.query(
+          `INSERT INTO leads (id, tenant_id, name, phone, email, source, status, notes, assigned_to, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, 'hvac_job', $6, $7, $8, $9, $9)
+           ON CONFLICT (tenant_id, phone) DO UPDATE SET
+             name = CASE WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE leads.name END,
+             email = CASE WHEN EXCLUDED.email <> '' THEN EXCLUDED.email ELSE leads.email END,
+             status = CASE WHEN EXCLUDED.status = 'booked' THEN 'booked' ELSE leads.status END,
+             notes = CASE WHEN EXCLUDED.notes <> '' THEN EXCLUDED.notes ELSE leads.notes END,
+             assigned_to = CASE WHEN EXCLUDED.assigned_to <> '' THEN EXCLUDED.assigned_to ELSE leads.assigned_to END,
+             updated_at = EXCLUDED.updated_at
+           RETURNING id`,
+          [core.genId('lead_'), ctx.tenant.id, callerName, phone, email, outcome === 'booked' ? 'booked' : 'new', notes, assignedTo, now]
+        );
+        leadId = leadRes.rows[0].id;
+      }
+
       if (existing.rowCount > 0) {
         const uRes = await client.query(
           `UPDATE hvac_jobs
-           SET caller_name = $1, phone = $2, email = $3, service = $4, urgency = $5, outcome = $6, assigned_to = $7, notes = $8, updated_at = $9
+           SET caller_name = $1, phone = $2, email = $3, service = $4, urgency = $5, outcome = $6, assigned_to = $7, notes = $8, updated_at = $9, lead_id = COALESCE($12, lead_id)
            WHERE id = $10 AND tenant_id = $11
            RETURNING *`,
-          [callerName, phone, email, service, urgency, outcome, assignedTo, notes, now, jobId, ctx.tenant.id]
+          [callerName, phone, email, service, urgency, outcome, assignedTo, notes, now, jobId, ctx.tenant.id, leadId]
         );
         job = uRes.rows[0];
       } else {
         const iRes = await client.query(
-          `INSERT INTO hvac_jobs (id, tenant_id, caller_name, phone, email, service, urgency, outcome, assigned_to, notes, appointment, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+          `INSERT INTO hvac_jobs (id, tenant_id, caller_name, phone, email, service, urgency, outcome, assigned_to, notes, appointment, created_at, updated_at, lead_id)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
            RETURNING *`,
-          [jobId, ctx.tenant.id, callerName, phone, email, service, urgency, outcome, assignedTo, notes, null, now, now]
+          [jobId, ctx.tenant.id, callerName, phone, email, service, urgency, outcome, assignedTo, notes, null, now, now, leadId]
         );
         job = iRes.rows[0];
       }
@@ -603,9 +626,39 @@ async function apiHvacJobSave(req, res, ctx) {
   }
 
   await core.mutate((d) => {
+    let leadId = null;
+    if (phone) {
+      let lead = d.leads.find((l) => (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id) && l.phone === phone);
+      if (lead) {
+        if (callerName) lead.name = callerName;
+        if (b.email) lead.email = String(b.email).trim().slice(0, 180);
+        if (outcome === 'booked') lead.status = 'booked';
+        if (notes) lead.notes = notes;
+        if (assignedTo) lead.assignedTo = assignedTo;
+        lead.updatedAt = now;
+      } else {
+        lead = {
+          id: core.genId('lead_'),
+          tenantId: ctx.tenant.id,
+          name: callerName,
+          phone,
+          email: String(b.email || '').trim().slice(0, 180),
+          source: 'hvac_job',
+          status: outcome === 'booked' ? 'booked' : 'new',
+          notes,
+          assignedTo,
+          createdAt: now,
+          updatedAt: now,
+        };
+        d.leads.push(lead);
+      }
+      leadId = lead.id;
+    }
+
     job = b.id ? d.hvacJobs.find((item) => item.id === String(b.id) && item.tenantId === ctx.tenant.id) : null;
     if (!job) { job = { id: core.genId('hvac_'), tenantId: ctx.tenant.id, createdAt: now, appointment: null }; d.hvacJobs.push(job); }
     Object.assign(job, { callerName, phone, email: String(b.email || '').trim().slice(0, 180), service: String(b.service || 'General HVAC').trim().slice(0, 80), urgency: String(b.urgency || 'normal').trim().slice(0, 30), outcome, assignedTo: String(b.assignedTo || '').trim().slice(0, 80), notes: String(b.notes || '').trim().slice(0, 2000), updatedAt: now });
+    if (leadId) job.leadId = leadId;
     addAudit(d, ctx, 'hvac.job.saved', 'hvac_job', job.id, { outcome: job.outcome });
   });
   core.sendJson(res, 200, { job: publicHvacJob(job) });
@@ -624,21 +677,37 @@ async function apiHvacBook(req, res, ctx) {
       const jobId = b.jobId ? String(b.jobId) : core.genId('hvac_');
       const existing = b.jobId ? await db.query('SELECT * FROM hvac_jobs WHERE id = $1 AND tenant_id = $2', [jobId, ctx.tenant.id]) : { rowCount: 0 };
       await db.transaction(async (client) => {
+        let leadId = null;
+        if (phone) {
+          const leadRes = await client.query(
+            `INSERT INTO leads (id, tenant_id, name, phone, email, source, status, notes, assigned_to, created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, 'hvac_job', 'booked', '', '', $6, $6)
+             ON CONFLICT (tenant_id, phone) DO UPDATE SET
+               name = CASE WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE leads.name END,
+               email = CASE WHEN EXCLUDED.email <> '' THEN EXCLUDED.email ELSE leads.email END,
+               status = 'booked',
+               updated_at = EXCLUDED.updated_at
+             RETURNING id`,
+            [core.genId('lead_'), ctx.tenant.id, name, phone, email, now]
+          );
+          leadId = leadRes.rows[0].id;
+        }
+
         if (existing.rowCount > 0) {
           const uRes = await client.query(
             `UPDATE hvac_jobs
-             SET outcome = 'booked', updated_at = $1, appointment = $2
+             SET outcome = 'booked', updated_at = $1, appointment = $2, lead_id = COALESCE($5, lead_id)
              WHERE id = $3 AND tenant_id = $4
              RETURNING *`,
-            [now, JSON.stringify(appointment), jobId, ctx.tenant.id]
+            [now, JSON.stringify(appointment), jobId, ctx.tenant.id, leadId]
           );
           job = uRes.rows[0];
         } else {
           const iRes = await client.query(
-            `INSERT INTO hvac_jobs (id, tenant_id, caller_name, phone, email, service, urgency, assigned_to, notes, outcome, appointment, created_at, updated_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'booked', $10, $11, $12)
+            `INSERT INTO hvac_jobs (id, tenant_id, caller_name, phone, email, service, urgency, assigned_to, notes, outcome, appointment, created_at, updated_at, lead_id)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'booked', $10, $11, $12, $13)
              RETURNING *`,
-            [jobId, ctx.tenant.id, name, phone, email, String(b.service || 'General HVAC').slice(0, 80), String(b.urgency || 'normal').slice(0, 30), '', '', JSON.stringify(appointment), now, now]
+            [jobId, ctx.tenant.id, name, phone, email, String(b.service || 'General HVAC').slice(0, 80), String(b.urgency || 'normal').slice(0, 30), '', '', JSON.stringify(appointment), now, now, leadId]
           );
           job = iRes.rows[0];
         }
@@ -648,13 +717,276 @@ async function apiHvacBook(req, res, ctx) {
     }
 
     await core.mutate((d) => {
+      let leadId = null;
+      if (phone) {
+        let lead = d.leads.find((l) => (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id) && l.phone === phone);
+        if (lead) {
+          if (name) lead.name = name;
+          if (email) lead.email = email;
+          lead.status = 'booked';
+          lead.updatedAt = now;
+        } else {
+          lead = {
+            id: core.genId('lead_'),
+            tenantId: ctx.tenant.id,
+            name,
+            phone,
+            email,
+            source: 'hvac_job',
+            status: 'booked',
+            notes: '',
+            assignedTo: '',
+            createdAt: now,
+            updatedAt: now,
+          };
+          d.leads.push(lead);
+        }
+        leadId = lead.id;
+      }
+
       job = b.jobId ? d.hvacJobs.find((item) => item.id === String(b.jobId) && item.tenantId === ctx.tenant.id) : null;
       if (!job) { job = { id: core.genId('hvac_'), tenantId: ctx.tenant.id, callerName: name, phone, email, service: String(b.service || 'General HVAC').slice(0, 80), urgency: String(b.urgency || 'normal').slice(0, 30), assignedTo: '', notes: '', createdAt: now }; d.hvacJobs.push(job); }
       job.outcome = 'booked'; job.updatedAt = now; job.appointment = appointment;
+      if (leadId) job.leadId = leadId;
       addAudit(d, ctx, 'hvac.booking.created', 'hvac_job', job.id, { eventTypeId, bookingUid: job.appointment.calBookingUid || '' });
     });
     core.sendJson(res, 201, { booking: booking.data, job: publicHvacJob(job) });
   } catch (e) { handleProviderError(res, e); }
+}
+
+/* ==========================================================================
+   Leads / Lightweight CRM
+   ========================================================================== */
+
+function publicLead(lead) {
+  if (!lead) return null;
+  return {
+    id: lead.id,
+    tenantId: lead.tenantId || lead.tenant_id,
+    name: lead.name || '',
+    phone: lead.phone || '',
+    email: lead.email || '',
+    source: lead.source || 'inbound_call',
+    status: lead.status || 'new',
+    notes: lead.notes || '',
+    assignedTo: lead.assignedTo || lead.assigned_to || '',
+    createdAt: toIso(lead.createdAt || lead.created_at),
+    updatedAt: toIso(lead.updatedAt || lead.updated_at),
+  };
+}
+
+async function apiLeadsList(req, res, ctx) {
+  const q = new URL(req.url, 'http://local').searchParams;
+  const status = q.get('status') ? String(q.get('status')).trim() : null;
+  const source = q.get('source') ? String(q.get('source')).trim() : null;
+  const page = Math.max(1, parseInt(q.get('page') || '1', 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(q.get('limit') || '50', 10) || 50));
+  const offset = (page - 1) * limit;
+
+  if (db.isPostgres) {
+    if (status) {
+      const { rows } = await db.query(
+        'SELECT * FROM leads WHERE tenant_id = $1 AND status = $2 ORDER BY created_at DESC',
+        [ctx.tenant.id, status]
+      );
+      let resRows = rows;
+      if (source) resRows = resRows.filter((r) => r.source === source);
+      const paged = resRows.slice(offset, offset + limit);
+      return core.sendJson(res, 200, { leads: paged.map(publicLead), page, limit, total: resRows.length });
+    } else {
+      const { rows } = await db.query(
+        'SELECT * FROM leads WHERE tenant_id = $1 ORDER BY created_at DESC',
+        [ctx.tenant.id]
+      );
+      let resRows = rows;
+      if (source) resRows = resRows.filter((r) => r.source === source);
+      const paged = resRows.slice(offset, offset + limit);
+      return core.sendJson(res, 200, { leads: paged.map(publicLead), page, limit, total: resRows.length });
+    }
+  }
+
+  let list = core.db().leads.filter((l) => (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id));
+  if (status) list = list.filter((l) => l.status === status);
+  if (source) list = list.filter((l) => l.source === source);
+  list.sort((a, b) => new Date(b.createdAt || b.created_at || 0) - new Date(a.createdAt || a.created_at || 0));
+
+  const paged = list.slice(offset, offset + limit);
+  core.sendJson(res, 200, { leads: paged.map(publicLead), page, limit, total: list.length });
+}
+
+async function apiLeadsCreate(req, res, ctx) {
+  const b = ctx.body || {};
+  const phone = String(b.phone || '').trim().slice(0, 32);
+  if (!phone) {
+    return core.sendJson(res, 422, { error: 'phone is required', code: 'missing_phone' });
+  }
+
+  const name = String(b.name || '').trim().slice(0, 120);
+  const email = String(b.email || '').trim().toLowerCase().slice(0, 180);
+  const source = String(b.source || 'inbound_call').trim().slice(0, 40);
+  const status = String(b.status || 'new').trim().slice(0, 40);
+  const notes = String(b.notes || '').trim().slice(0, 2000);
+  const assignedTo = String(b.assignedTo || b.assigned_to || '').trim().slice(0, 80);
+  const now = new Date().toISOString();
+
+  if (db.isPostgres) {
+    const leadId = b.id ? String(b.id) : core.genId('lead_');
+    const { rows } = await db.query(
+      `INSERT INTO leads (id, tenant_id, name, phone, email, source, status, notes, assigned_to, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (tenant_id, phone) DO UPDATE SET
+         name = CASE WHEN EXCLUDED.name <> '' THEN EXCLUDED.name ELSE leads.name END,
+         email = CASE WHEN EXCLUDED.email <> '' THEN EXCLUDED.email ELSE leads.email END,
+         status = CASE WHEN EXCLUDED.status <> 'new' THEN EXCLUDED.status ELSE leads.status END,
+         notes = CASE WHEN EXCLUDED.notes <> '' THEN EXCLUDED.notes ELSE leads.notes END,
+         assigned_to = CASE WHEN EXCLUDED.assigned_to <> '' THEN EXCLUDED.assigned_to ELSE leads.assigned_to END,
+         updated_at = EXCLUDED.updated_at
+       RETURNING *`,
+      [leadId, ctx.tenant.id, name, phone, email, source, status, notes, assignedTo, now, now]
+    );
+    const lead = rows[0];
+    return core.sendJson(res, 200, { lead: publicLead(lead) });
+  }
+
+  let lead;
+  await core.mutate((d) => {
+    lead = d.leads.find((l) => (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id) && l.phone === phone);
+    if (lead) {
+      if (name) lead.name = name;
+      if (email) lead.email = email;
+      if (status && status !== 'new') lead.status = status;
+      if (notes) lead.notes = notes;
+      if (assignedTo) lead.assignedTo = assignedTo;
+      lead.updatedAt = now;
+    } else {
+      lead = {
+        id: b.id ? String(b.id) : core.genId('lead_'),
+        tenantId: ctx.tenant.id,
+        name,
+        phone,
+        email,
+        source,
+        status,
+        notes,
+        assignedTo,
+        createdAt: now,
+        updatedAt: now,
+      };
+      d.leads.push(lead);
+    }
+  });
+
+  core.sendJson(res, 200, { lead: publicLead(lead) });
+}
+
+async function apiLeadsGet(req, res, ctx, id) {
+  if (db.isPostgres) {
+    const leadRes = await db.query('SELECT * FROM leads WHERE id = $1 AND tenant_id = $2', [id, ctx.tenant.id]);
+    if (leadRes.rowCount === 0) {
+      return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+    }
+    const lead = leadRes.rows[0];
+    const callsRes = await db.query('SELECT * FROM calls WHERE lead_id = $1 ORDER BY created_at DESC', [id]);
+    const jobsRes = await db.query('SELECT * FROM hvac_jobs WHERE lead_id = $1 ORDER BY created_at DESC', [id]);
+    return core.sendJson(res, 200, {
+      lead: publicLead(lead),
+      calls: callsRes.rows,
+      hvacJobs: jobsRes.rows.map(publicHvacJob),
+    });
+  }
+
+  const d = core.db();
+  const lead = d.leads.find((l) => l.id === id && (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id));
+  if (!lead) {
+    return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+  }
+  const calls = (d.calls || []).filter((c) => (c.leadId === id || c.lead_id === id));
+  const hvacJobs = (d.hvacJobs || []).filter((j) => (j.leadId === id || j.lead_id === id));
+
+  core.sendJson(res, 200, {
+    lead: publicLead(lead),
+    calls,
+    hvacJobs: hvacJobs.map(publicHvacJob),
+  });
+}
+
+async function apiLeadsPatch(req, res, ctx, id) {
+  const b = ctx.body || {};
+  const now = new Date().toISOString();
+
+  if (db.isPostgres) {
+    const existing = await db.query('SELECT * FROM leads WHERE id = $1 AND tenant_id = $2', [id, ctx.tenant.id]);
+    if (existing.rowCount === 0) {
+      return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+    }
+    const current = existing.rows[0];
+    const status = b.status !== undefined ? String(b.status).trim().slice(0, 40) : current.status;
+    const notes = b.notes !== undefined ? String(b.notes).trim().slice(0, 2000) : current.notes;
+    const assignedTo = (b.assignedTo !== undefined || b.assigned_to !== undefined)
+      ? String(b.assignedTo !== undefined ? b.assignedTo : b.assigned_to).trim().slice(0, 80)
+      : (current.assignedTo || current.assigned_to || '');
+    const name = b.name !== undefined ? String(b.name).trim().slice(0, 120) : current.name;
+    const email = b.email !== undefined ? String(b.email).trim().toLowerCase().slice(0, 180) : current.email;
+
+    const { rows } = await db.query(
+      `UPDATE leads
+       SET status = $1, notes = $2, assigned_to = $3, name = $4, email = $5, updated_at = $6
+       WHERE id = $7 AND tenant_id = $8
+       RETURNING *`,
+      [status, notes, assignedTo, name, email, now, id, ctx.tenant.id]
+    );
+    return core.sendJson(res, 200, { lead: publicLead(rows[0]) });
+  }
+
+  let lead;
+  await core.mutate((d) => {
+    lead = d.leads.find((l) => l.id === id && (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id));
+    if (!lead) return;
+    if (b.status !== undefined) lead.status = String(b.status).trim().slice(0, 40);
+    if (b.notes !== undefined) lead.notes = String(b.notes).trim().slice(0, 2000);
+    if (b.assignedTo !== undefined || b.assigned_to !== undefined) {
+      lead.assignedTo = String(b.assignedTo !== undefined ? b.assignedTo : b.assigned_to).trim().slice(0, 80);
+    }
+    if (b.name !== undefined) lead.name = String(b.name).trim().slice(0, 120);
+    if (b.email !== undefined) lead.email = String(b.email).trim().toLowerCase().slice(0, 180);
+    lead.updatedAt = now;
+  });
+
+  if (!lead) {
+    return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+  }
+  core.sendJson(res, 200, { lead: publicLead(lead) });
+}
+
+async function apiLeadsDelete(req, res, ctx, id) {
+  const now = new Date().toISOString();
+
+  if (db.isPostgres) {
+    const { rows, rowCount } = await db.query(
+      `UPDATE leads
+       SET status = 'closed', updated_at = $1
+       WHERE id = $2 AND tenant_id = $3
+       RETURNING *`,
+      [now, id, ctx.tenant.id]
+    );
+    if (rowCount === 0) {
+      return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+    }
+    return core.sendJson(res, 200, { success: true, lead: publicLead(rows[0]) });
+  }
+
+  let lead;
+  await core.mutate((d) => {
+    lead = d.leads.find((l) => l.id === id && (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id));
+    if (!lead) return;
+    lead.status = 'closed';
+    lead.updatedAt = now;
+  });
+
+  if (!lead) {
+    return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+  }
+  core.sendJson(res, 200, { success: true, lead: publicLead(lead) });
 }
 
 async function apiAgentsList(req, res, ctx) {
@@ -2090,6 +2422,359 @@ async function apiAdminTenants(req, res) {
   })) });
 }
 
+/* ==========================================================================
+   Industry Templates & Tenant Provisioning
+   ========================================================================== */
+
+const INDUSTRY_TEMPLATES = Object.freeze({
+  dental: Object.freeze({
+    presetId: 'preset_dental_v1',
+    defaultGreeting: 'Thank you for calling {business_name}. How can I help you today?',
+    defaultPersona: 'You are a friendly dental receptionist for {business_name}. Assist callers with booking appointments, insurance questions, and general clinic info. Stay polite, empathetic, and professional.',
+    defaultHours: Object.freeze({ mon: '09:00-17:00', tue: '09:00-17:00', wed: '09:00-17:00', thu: '09:00-17:00', fri: '09:00-14:00' }),
+  }),
+  legal: Object.freeze({
+    presetId: 'preset_legal_v1',
+    defaultGreeting: 'Thank you for calling {business_name}. How may I assist you?',
+    defaultPersona: 'You are a professional legal intake specialist for {business_name}. Gather key incident details and schedule consultations. Never provide legal advice.',
+    defaultHours: Object.freeze({ mon: '09:00-18:00', tue: '09:00-18:00', wed: '09:00-18:00', thu: '09:00-18:00', fri: '09:00-17:00' }),
+  }),
+  hvac: Object.freeze({
+    presetId: 'preset_hvac_v1',
+    defaultGreeting: 'Thanks for calling {business_name}. What HVAC issue can I help with?',
+    defaultPersona: 'You are an HVAC scheduling assistant for {business_name}. Ask about their AC or heating problem, urgency, address, and schedule an appointment.',
+    defaultHours: Object.freeze({ mon: '08:00-18:00', tue: '08:00-18:00', wed: '08:00-18:00', thu: '08:00-18:00', fri: '08:00-17:00', sat: '09:00-14:00' }),
+  }),
+  real_estate: Object.freeze({
+    presetId: 'preset_realestate_v1',
+    defaultGreeting: 'Hello, thank you for calling {business_name}!',
+    defaultPersona: 'You are a real estate assistant for {business_name}. Qualify buyers and sellers on budget, location, and timeline, and offer property viewings.',
+    defaultHours: Object.freeze({ mon: '09:00-19:00', tue: '09:00-19:00', wed: '09:00-19:00', thu: '09:00-19:00', fri: '09:00-18:00', sat: '10:00-16:00' }),
+  }),
+  restaurant: Object.freeze({
+    presetId: 'preset_restaurant_v1',
+    defaultGreeting: 'Welcome to {business_name}! How can I help you today?',
+    defaultPersona: 'You are a friendly host for {business_name}. Help guests with reservations, opening hours, party sizes, and general menu questions.',
+    defaultHours: Object.freeze({ mon: '11:00-22:00', tue: '11:00-22:00', wed: '11:00-22:00', thu: '11:00-22:00', fri: '11:00-23:00', sat: '10:00-23:00', sun: '10:00-21:00' }),
+  }),
+  med_spa: Object.freeze({
+    presetId: 'preset_medspa_v1',
+    defaultGreeting: 'Thank you for calling {business_name}. How can I assist you?',
+    defaultPersona: 'You are a welcoming spa receptionist for {business_name}. Explain popular treatments and assist clients with booking aesthetic consultations.',
+    defaultHours: Object.freeze({ mon: '10:00-18:00', tue: '10:00-18:00', wed: '10:00-18:00', thu: '10:00-19:00', fri: '10:00-18:00', sat: '10:00-16:00' }),
+  }),
+});
+
+function publicClientSettings(s) {
+  if (!s) return null;
+  return {
+    tenantId: s.tenantId || s.tenant_id,
+    industry: s.industry || '',
+    timezone: s.timezone || 'Asia/Kolkata',
+    businessHours: s.businessHours || s.business_hours || {},
+    knowledgeBase: s.knowledgeBase || s.knowledge_base || '',
+    customFields: s.customFields || s.custom_fields || {},
+    calendarProvider: s.calendarProvider || s.calendar_provider || null,
+    updatedAt: toIso(s.updatedAt || s.updated_at),
+  };
+}
+
+async function apiAdminTenantProvision(req, res, ctx) {
+  if (rejectImpersonated(res, ctx)) return;
+  const b = ctx.body || {};
+  const name = String(b.name || '').trim().slice(0, 80);
+  const ownerEmail = String(b.ownerEmail || '').trim().toLowerCase().slice(0, 160);
+  const password = String(b.password || '');
+  const industry = String(b.industry || '').trim().toLowerCase();
+
+  if (!name) return core.sendJson(res, 422, { error: 'client workspace name required', code: 'bad_tenant' });
+  if (!industry || !INDUSTRY_TEMPLATES[industry]) {
+    return core.sendJson(res, 422, { error: 'unknown or unsupported industry template', code: 'invalid_industry' });
+  }
+  if (!ownerEmail || !EMAIL_RE.test(ownerEmail) || password.length < 8) {
+    return core.sendJson(res, 422, { error: 'valid owner email and password (minimum 8 characters) required', code: 'bad_owner' });
+  }
+
+  if (db.isPostgres) {
+    const emailCheck = await db.query('SELECT 1 FROM users WHERE email = $1', [ownerEmail]);
+    if (emailCheck.rowCount > 0) return core.sendJson(res, 409, { error: 'owner email is already registered', code: 'email_taken' });
+  } else {
+    if (core.db().users.some((user) => user.email === ownerEmail)) {
+      return core.sendJson(res, 409, { error: 'owner email is already registered', code: 'email_taken' });
+    }
+  }
+
+  const template = INDUSTRY_TEMPLATES[industry];
+  const greeting = template.defaultGreeting.replace(/\{business_name\}/g, name);
+  const persona = template.defaultPersona.replace(/\{business_name\}/g, name);
+  const timezone = String(b.timezone || 'Asia/Kolkata').trim();
+  const businessHours = b.businessHours || template.defaultHours;
+  const knowledgeBase = String(b.knowledgeBase || '').trim();
+  const customFields = b.customFields || {};
+  const now = new Date().toISOString();
+
+  let tenant;
+  let user;
+  let agent;
+  let demoLinkRecord;
+  let demoToken;
+
+  if (db.isPostgres) {
+    await db.transaction(async (client) => {
+      const slugRows = await client.query('SELECT slug FROM tenants');
+      const taken = new Set(slugRows.rows.map((r) => r.slug));
+      const slug = makeSlug(name, taken);
+      const tenantId = core.genId('t_');
+
+      tenant = {
+        id: tenantId, name, slug,
+        createdAt: now, branding: { color: '#B88A2D' }, providers: { ...DEFAULT_PROVIDERS },
+        plan: 'studio', status: 'active', privacyMode: 'standard',
+      };
+
+      await client.query(
+        `INSERT INTO tenants (id, name, slug, branding, providers, plan, status, privacy_mode, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [tenantId, name, slug, JSON.stringify(tenant.branding), JSON.stringify(tenant.providers), tenant.plan, tenant.status, tenant.privacyMode, now]
+      );
+
+      await client.query(
+        `INSERT INTO wallets (id, tenant_id, currency, balance_paise, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6)`,
+        [core.genId('wal_'), tenantId, 'INR', 0, now, now]
+      );
+
+      const userId = core.genId('u_');
+      const passHash = core.hashPassword(password);
+      const ownerName = String(b.ownerName || `${name} Owner`).trim().slice(0, 80);
+      user = { id: userId, tenantId, email: ownerEmail, name: ownerName, passHash, role: 'owner', status: 'active', createdAt: now };
+
+      await client.query(
+        `INSERT INTO users (id, tenant_id, email, name, pass_hash, role, status, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [userId, tenantId, ownerEmail, ownerName, passHash, user.role, user.status, now]
+      );
+
+      const agentId = core.genId('ag_');
+      const agentName = `${name} Receptionist`;
+      agent = {
+        id: agentId,
+        tenantId,
+        name: agentName,
+        persona,
+        tts: {},
+        greeting,
+        telephony: {},
+        presetId: template.presetId,
+        createdAt: now,
+      };
+
+      await client.query(
+        `INSERT INTO agents (id, tenant_id, name, persona, tts, greeting, telephony, preset_id, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [agentId, tenantId, agentName, persona, JSON.stringify(agent.tts), greeting, JSON.stringify(agent.telephony), template.presetId, now]
+      );
+
+      await client.query(
+        `INSERT INTO client_settings (tenant_id, industry, timezone, business_hours, knowledge_base, custom_fields, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [tenantId, industry, timezone, JSON.stringify(businessHours), knowledgeBase, JSON.stringify(customFields), now]
+      );
+
+      const generated = demoLinks.createDemoToken();
+      demoToken = generated.token;
+      const limits = demoLinks.normalizeDemoLimits({});
+      demoLinkRecord = {
+        id: generated.id,
+        tokenHash: generated.tokenHash,
+        tenantId,
+        agentId,
+        label: `${agentName} demo`,
+        status: 'active',
+        starts: 0,
+        createdBy: userId,
+        createdAt: now,
+        ...limits,
+      };
+
+      await client.query(
+        `INSERT INTO demo_links (id, token_hash, tenant_id, agent_id, label, status, starts, max_starts, max_session_seconds, expires_at, revoked_at, revoked_by, created_by, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+        [demoLinkRecord.id, demoLinkRecord.tokenHash, demoLinkRecord.tenantId, demoLinkRecord.agentId, demoLinkRecord.label, demoLinkRecord.status, demoLinkRecord.starts, demoLinkRecord.maxStarts, demoLinkRecord.maxSessionSeconds, demoLinkRecord.expiresAt, demoLinkRecord.revokedAt, demoLinkRecord.revokedBy, demoLinkRecord.createdBy, demoLinkRecord.createdAt]
+      );
+
+      await client.query(
+        `INSERT INTO client_activities (id, tenant_id, type, channel, visibility, summary, actor_user_id, created_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [core.genId('act_'), tenantId, 'workspace_provisioned', 'internal', 'internal', `Client workspace provisioned for industry ${industry}.`, ctx.user.id, now]
+      );
+
+      await db.addAuditSql(client, ctx, 'admin.tenant.provisioned', 'tenant', tenantId, { industry, agentId });
+    });
+  } else {
+    await core.mutate((store) => {
+      const slug = makeSlug(name, new Set(store.tenants.map((t) => t.slug)));
+      const tenantId = core.genId('t_');
+      tenant = {
+        id: tenantId, name, slug,
+        createdAt: now, branding: { color: '#B88A2D' }, providers: { ...DEFAULT_PROVIDERS },
+        plan: 'studio', status: 'active', privacyMode: 'standard',
+      };
+      store.tenants.push(tenant);
+
+      store.wallets.push({ id: core.genId('wal_'), tenantId, currency: 'INR', balancePaise: 0, createdAt: now, updatedAt: now });
+
+      const userId = core.genId('u_');
+      const passHash = core.hashPassword(password);
+      const ownerName = String(b.ownerName || `${name} Owner`).trim().slice(0, 80);
+      user = { id: userId, tenantId, email: ownerEmail, name: ownerName, passHash, role: 'owner', status: 'active', createdAt: now };
+      store.users.push(user);
+
+      const agentId = core.genId('ag_');
+      const agentName = `${name} Receptionist`;
+      agent = {
+        id: agentId,
+        tenantId,
+        name: agentName,
+        persona,
+        tts: {},
+        greeting,
+        telephony: {},
+        presetId: template.presetId,
+        createdAt: now,
+      };
+      store.agents.push(agent);
+
+      store.clientSettings.push({
+        tenantId,
+        industry,
+        timezone,
+        businessHours,
+        knowledgeBase,
+        customFields,
+        updatedAt: now,
+      });
+
+      const generated = demoLinks.createDemoToken();
+      demoToken = generated.token;
+      const limits = demoLinks.normalizeDemoLimits({});
+      demoLinkRecord = {
+        id: generated.id,
+        tokenHash: generated.tokenHash,
+        tenantId,
+        agentId,
+        label: `${agentName} demo`,
+        status: 'active',
+        starts: 0,
+        createdBy: userId,
+        createdAt: now,
+        ...limits,
+      };
+      store.demoLinks.push(demoLinkRecord);
+
+      store.clientActivities.push({
+        id: core.genId('act_'),
+        tenantId,
+        type: 'workspace_provisioned',
+        channel: 'internal',
+        visibility: 'internal',
+        summary: `Client workspace provisioned for industry ${industry}.`,
+        actorUserId: ctx.user.id,
+        createdAt: now,
+      });
+
+      addAudit(store, ctx, 'admin.tenant.provisioned', 'tenant', tenantId, { industry, agentId });
+    });
+  }
+
+  core.sendJson(res, 201, {
+    tenant: publicTenant(tenant),
+    owner: publicUser(user),
+    agent: publicAgent(agent),
+    demoLink: demoLinks.publicDemoLink(demoLinkRecord),
+    sharePath: `/demo/${demoToken}`,
+  });
+}
+
+async function apiAdminTenantSettingsGet(req, res, ctx, tenantId) {
+  if (db.isPostgres) {
+    const tRes = await db.query('SELECT id FROM tenants WHERE id = $1', [tenantId]);
+    if (tRes.rowCount === 0) return core.sendJson(res, 404, { error: 'tenant not found', code: 'not_found' });
+    const sRes = await db.query('SELECT * FROM client_settings WHERE tenant_id = $1', [tenantId]);
+    const settings = sRes.rowCount > 0 ? sRes.rows[0] : { tenantId, industry: '', timezone: 'Asia/Kolkata', businessHours: {}, knowledgeBase: '', customFields: {} };
+    return core.sendJson(res, 200, { settings: publicClientSettings(settings) });
+  }
+
+  const t = core.db().tenants.find((item) => item.id === tenantId);
+  if (!t) return core.sendJson(res, 404, { error: 'tenant not found', code: 'not_found' });
+  const s = core.db().clientSettings.find((item) => item.tenantId === tenantId || item.tenant_id === tenantId);
+  const settings = s || { tenantId, industry: '', timezone: 'Asia/Kolkata', businessHours: {}, knowledgeBase: '', customFields: {} };
+  core.sendJson(res, 200, { settings: publicClientSettings(settings) });
+}
+
+async function apiAdminTenantSettingsPatch(req, res, ctx, tenantId) {
+  if (rejectImpersonated(res, ctx)) return;
+  const b = ctx.body || {};
+  const now = new Date().toISOString();
+
+  if (db.isPostgres) {
+    const tRes = await db.query('SELECT id FROM tenants WHERE id = $1', [tenantId]);
+    if (tRes.rowCount === 0) return core.sendJson(res, 404, { error: 'tenant not found', code: 'not_found' });
+
+    const sRes = await db.query('SELECT * FROM client_settings WHERE tenant_id = $1', [tenantId]);
+    const existing = sRes.rowCount > 0 ? sRes.rows[0] : null;
+
+    const industry = b.industry !== undefined ? String(b.industry).trim() : (existing ? existing.industry : '');
+    const timezone = b.timezone !== undefined ? String(b.timezone).trim() : (existing ? existing.timezone : 'Asia/Kolkata');
+    const businessHours = b.businessHours !== undefined ? b.businessHours : (existing ? (existing.businessHours || existing.business_hours || {}) : {});
+    const knowledgeBase = b.knowledgeBase !== undefined ? String(b.knowledgeBase).trim() : (existing ? existing.knowledgeBase : '');
+    const customFields = b.customFields !== undefined ? b.customFields : (existing ? (existing.customFields || existing.custom_fields || {}) : {});
+
+    const uRes = await db.query(
+      `INSERT INTO client_settings (tenant_id, industry, timezone, business_hours, knowledge_base, custom_fields, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       ON CONFLICT (tenant_id) DO UPDATE SET
+         industry = EXCLUDED.industry,
+         timezone = EXCLUDED.timezone,
+         business_hours = EXCLUDED.business_hours,
+         knowledge_base = EXCLUDED.knowledge_base,
+         custom_fields = EXCLUDED.custom_fields,
+         updated_at = EXCLUDED.updated_at
+       RETURNING *`,
+      [tenantId, industry, timezone, JSON.stringify(businessHours), knowledgeBase, JSON.stringify(customFields), now]
+    );
+    return core.sendJson(res, 200, { settings: publicClientSettings(uRes.rows[0]) });
+  }
+
+  let settings;
+  await core.mutate((d) => {
+    const t = d.tenants.find((item) => item.id === tenantId);
+    if (!t) return;
+    settings = d.clientSettings.find((item) => item.tenantId === tenantId || item.tenant_id === tenantId);
+    if (!settings) {
+      settings = {
+        tenantId,
+        industry: '',
+        timezone: 'Asia/Kolkata',
+        businessHours: {},
+        knowledgeBase: '',
+        customFields: {},
+        updatedAt: now,
+      };
+      d.clientSettings.push(settings);
+    }
+    if (b.industry !== undefined) settings.industry = String(b.industry).trim();
+    if (b.timezone !== undefined) settings.timezone = String(b.timezone).trim();
+    if (b.businessHours !== undefined) settings.businessHours = b.businessHours;
+    if (b.knowledgeBase !== undefined) settings.knowledgeBase = String(b.knowledgeBase).trim();
+    if (b.customFields !== undefined) settings.customFields = b.customFields;
+    settings.updatedAt = now;
+  });
+
+  if (!settings) return core.sendJson(res, 404, { error: 'tenant not found', code: 'not_found' });
+  core.sendJson(res, 200, { settings: publicClientSettings(settings) });
+}
+
 async function apiAdminTenantCreate(req, res, ctx) {
   if (rejectImpersonated(res, ctx)) return;
   const b = ctx.body || {};
@@ -2637,6 +3322,12 @@ const server = http.createServer(async (req, res) => {
 
       // ---- Authed GET routes ----
       if (req.method === 'GET') {
+        if (route === '/api/leads') return core.requireAuth(req, res, apiLeadsList);
+        if (route.startsWith('/api/leads/')) {
+          const leadId = decodeURIComponent(route.slice('/api/leads/'.length));
+          if (!leadId || leadId.includes('/')) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+          return core.requireAuth(req, res, (rq, rs, ctx) => apiLeadsGet(rq, rs, ctx, leadId));
+        }
         if (route === '/api/me') return core.requireAuth(req, res, apiMe);
         if (route === '/api/agents') return core.requireAuth(req, res, apiAgentsList);
         if (route === '/api/usage') return core.requireAuth(req, res, apiUsage);
@@ -2661,9 +3352,46 @@ const server = http.createServer(async (req, res) => {
         if (route === '/api/admin/tickets') return core.requireRole(req, res, 'admin', apiAdminTickets);
         if (route === '/api/admin/tenant-detail') return core.requireRole(req, res, 'super_admin', apiAdminTenantDetail);
         if (route === '/api/admin/payment-events') return core.requireRole(req, res, 'admin', apiAdminPaymentEvents);
+        if (route.startsWith('/api/admin/tenants/') && route.endsWith('/settings')) {
+          const tenantId = decodeURIComponent(route.slice('/api/admin/tenants/'.length, -'/settings'.length));
+          if (!tenantId || tenantId.includes('/')) return core.sendJson(res, 404, { error: 'tenant not found', code: 'not_found' });
+          return core.requireRole(req, res, 'super_admin', (rq, rs, ctx) => apiAdminTenantSettingsGet(rq, rs, ctx, tenantId));
+        }
         if (route === '/api/hvac/desk') return core.requireAuth(req, res, apiHvacDesk);
         if (route === '/api/hvac/event-types') return core.requireAuth(req, res, apiHvacEventTypes);
         if (route === '/api/hvac/slots') return core.requireAuth(req, res, apiHvacSlots);
+        return core.sendJson(res, 404, { error: 'no such endpoint', code: 'not_found' });
+      }
+
+      if (req.method === 'PATCH') {
+        let body;
+        try {
+          body = await core.readBody(req, 64 * 1024);
+        } catch (e) {
+          const tooBig = /too large/.test(String(e.message));
+          return core.sendJson(res, tooBig ? 413 : 400, {
+            error: e.message, code: tooBig ? 'too_large' : 'bad_body',
+          });
+        }
+        if (route.startsWith('/api/leads/')) {
+          const leadId = decodeURIComponent(route.slice('/api/leads/'.length));
+          if (!leadId || leadId.includes('/')) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+          return core.requireAuth(req, res, (rq, rs, ctx) => apiLeadsPatch(rq, rs, ctx, leadId), body);
+        }
+        if (route.startsWith('/api/admin/tenants/') && route.endsWith('/settings')) {
+          const tenantId = decodeURIComponent(route.slice('/api/admin/tenants/'.length, -'/settings'.length));
+          if (!tenantId || tenantId.includes('/')) return core.sendJson(res, 404, { error: 'tenant not found', code: 'not_found' });
+          return core.requireRole(req, res, 'super_admin', (rq, rs, ctx) => apiAdminTenantSettingsPatch(rq, rs, ctx, tenantId), body);
+        }
+        return core.sendJson(res, 404, { error: 'no such endpoint', code: 'not_found' });
+      }
+
+      if (req.method === 'DELETE') {
+        if (route.startsWith('/api/leads/')) {
+          const leadId = decodeURIComponent(route.slice('/api/leads/'.length));
+          if (!leadId || leadId.includes('/')) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+          return core.requireAuth(req, res, (rq, rs, ctx) => apiLeadsDelete(rq, rs, ctx, leadId));
+        }
         return core.sendJson(res, 404, { error: 'no such endpoint', code: 'not_found' });
       }
 
@@ -2717,6 +3445,7 @@ const server = http.createServer(async (req, res) => {
       if (route === '/api/integrations/request') return core.requireRole(req, res, 'owner', apiIntegrationRequest, body);
       if (route === '/api/agency/prompt') return core.requireRole(req, res, 'owner', apiAgencyPromptSave, body);
       if (route === '/api/admin/client-approach') return core.requireRole(req, res, 'admin', apiClientApproach, body);
+      if (route === '/api/admin/tenants/provision') return core.requireRole(req, res, 'super_admin', apiAdminTenantProvision, body);
       if (route === '/api/admin/tenants') return core.requireRole(req, res, 'super_admin', apiAdminTenantCreate, body);
       if (route === '/api/admin/tenants/status') return core.requireRole(req, res, 'super_admin', apiAdminTenantStatus, body);
       if (route === '/api/admin/users/status') return core.requireRole(req, res, 'super_admin', apiAdminUserStatus, body);
@@ -2727,6 +3456,7 @@ const server = http.createServer(async (req, res) => {
       if (route === '/api/admin/impersonations') return core.requireRole(req, res, 'super_admin', apiAdminImpersonate, body);
       if (route === '/api/hvac/jobs') return core.requireAuth(req, res, apiHvacJobSave, body);
       if (route === '/api/hvac/book') return core.requireAuth(req, res, apiHvacBook, body);
+      if (route === '/api/leads') return core.requireAuth(req, res, apiLeadsCreate, body);
 
       return core.sendJson(res, 404, { error: 'no such endpoint', code: 'not_found' });
     }

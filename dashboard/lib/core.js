@@ -171,7 +171,7 @@ function defaultDb() {
     supportMessages: [], auditEvents: [], presets: [], byonConnections: [],
     hvacJobs: [], hvacSettings: [], paymentEvents: [], demoLinks: [],
     invoices: [], invoiceEvents: [], integrationRequests: [], agencyPrompts: [],
-    clientActivities: [], tenantStatusEvents: [],
+    clientActivities: [], tenantStatusEvents: [], leads: [], clientSettings: [],
   };
 }
 
@@ -180,7 +180,7 @@ const COLLECTIONS = [
   'paymentIntents', 'supportTickets', 'supportMessages', 'auditEvents',
   'presets', 'byonConnections', 'hvacJobs', 'hvacSettings', 'paymentEvents', 'demoLinks',
   'invoices', 'invoiceEvents', 'integrationRequests', 'agencyPrompts',
-  'clientActivities', 'tenantStatusEvents',
+  'clientActivities', 'tenantStatusEvents', 'leads', 'clientSettings',
 ];
 
 function migrateDb(parsed) {
@@ -190,6 +190,18 @@ function migrateDb(parsed) {
   for (const tenant of out.tenants) {
     if (!tenant.status) tenant.status = 'active';
     if (!tenant.privacyMode) tenant.privacyMode = 'standard';
+    const hasSettings = out.clientSettings.some((cs) => cs.tenantId === tenant.id || cs.tenant_id === tenant.id);
+    if (!hasSettings) {
+      out.clientSettings.push({
+        tenantId: tenant.id,
+        industry: '',
+        timezone: 'Asia/Kolkata',
+        businessHours: {},
+        knowledgeBase: '',
+        customFields: {},
+        updatedAt: new Date().toISOString(),
+      });
+    }
   }
   for (const user of out.users) {
     if (!['super_admin', 'admin', 'owner', 'member'].includes(user.role)) user.role = 'member';
