@@ -18,7 +18,7 @@ const { Pool } = require('pg');
 
 const connectionString = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/postgres';
 const pool = new Pool({ connectionString });
-const dbPath = path.join(__dirname, '../data/db.json');
+const dbPath = process.env.GETQUALIFY_DB_FILE || path.join(__dirname, '../data/db.json');
 
 async function run() {
   if (!fs.existsSync(dbPath)) {

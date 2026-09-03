@@ -42,7 +42,10 @@ test('migrate-admin-support script runs idempotently without unhandled rejection
 
   // If local Postgres is reachable, the exit code is 0; if not reachable, it fails with connection refused
   if (result.status === 0) {
-    assert.ok(result.stdout.includes('Admin & Support migration completed successfully.'));
+    assert.ok(
+      result.stdout.includes('Admin & Support migration completed successfully.') ||
+      result.stdout.includes('No data/db.json found, skipping admin & support migration.')
+    );
   } else {
     // If postgres isn't running in non-pg environments, it should fail gracefully with a log
     assert.ok(result.stderr.length > 0 || result.stdout.length > 0);

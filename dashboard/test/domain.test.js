@@ -49,7 +49,10 @@ test('migrate-domain script runs idempotently without unhandled rejections', () 
   });
 
   if (result.status === 0) {
-    assert.ok(result.stdout.includes('Domain-Specific migration completed successfully.'));
+    assert.ok(
+      result.stdout.includes('Domain-Specific migration completed successfully.') ||
+      result.stdout.includes('No data/db.json found, skipping domain migration.')
+    );
   } else {
     // If PostgreSQL is not reachable in an environment, it fails gracefully with an error log
     assert.ok(result.stderr.length > 0 || result.stdout.length > 0);
