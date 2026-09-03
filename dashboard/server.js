@@ -25,6 +25,10 @@ const providers = require('./lib/providers');
 const payu = require('./lib/payu');
 const demoLinks = require('./lib/demo-links');
 const db = require('./lib/db');
+const sms = require('./lib/sms');
+const calendar = require('./lib/calendar');
+const storage = require('./lib/storage');
+const email = require('./lib/email');
 
 const PORT = parseInt(process.env.PORT || '8787', 10);
 const DEFAULT_PROVIDERS = Object.freeze({
@@ -1428,6 +1432,292 @@ async function apiTelephonyDial(req, res, ctx) {
     core.sendJson(res, r.status, r.data);
   } catch (e) {
     handleProviderError(res, e);
+  }
+}
+
+// POST /api/webhooks/dograh/call-completed -> Trigger engine for post-call automations.
+async function apiWebhookDograhCallCompleted(req, res, body = {}) {
+  const expectedSecret = process.env.DOGRAH_WEBHOOK_SECRET;
+  if (expectedSecret) {
+    const headerSecret = req.headers['x-dograh-webhook-secret'] || req.headers['x-webhook-secret'];
+    if (!headerSecret || headerSecret !== expectedSecret) {
+      return core.sendJson(res, 401, { error: 'invalid or missing webhook secret', code: 'unauthorized_webhook' });
+    }
+  }
+
+  const callId = String(body.call_id || body.workflow_run_id || core.genId('call_')).trim();
+  const callerNumber = String(body.caller_number || body.from || body.caller || '').trim();
+  const calledNumber = String(body.called_number || body.to || body.did || '').trim();
+  const duration = Math.max(0, Math.round(Number(body.duration || body.call_duration_seconds || 0)));
+  const rawDisposition = String(body.disposition || body.status || 'completed').trim().toLowerCase();
+  const isMissed = ['no-answer', 'busy', 'failed', 'missed', 'canceled', 'cancelled'].includes(rawDisposition);
+  const status = isMissed ? 'missed' : 'completed';
+  const recordingUrl = String(body.recording_url || '').trim();
+  const transcript = String(body.transcript || body.text || '').trim();
+  const gatheredContext = (body.gathered_context && typeof body.gathered_context === 'object') ? body.gathered_context : {};
+  const callerName = String(gatheredContext.name || body.caller_name || 'Caller').trim();
+
+  let tenantId = body.tenant_id;
+  if (!tenantId) {
+    const urlParts = (req.url || '').split('?');
+    if (urlParts[1]) {
+      const q = new URLSearchParams(urlParts[1]);
+      tenantId = q.get('tenant_id');
+    }
+  }
+
+  if (db.isPostgres) {
+    if (!tenantId) {
+      const byonRes = await db.query(
+        'SELECT tenant_id FROM byon_connections WHERE address = $1 OR address = $2 LIMIT 1',
+        [calledNumber, callerNumber]
+      ).catch(() => ({ rows: [] }));
+      if (byonRes.rows.length > 0) {
+        tenantId = byonRes.rows[0].tenantId;
+      } else {
+        const tenantRes = await db.query(
+          'SELECT id FROM tenants WHERE status = $1 ORDER BY created_at ASC LIMIT 1',
+          ['active']
+        ).catch(() => ({ rows: [] }));
+        if (tenantRes.rows.length > 0) tenantId = tenantRes.rows[0].id;
+      }
+    }
+  } else {
+    const d = core.loadDb();
+    if (!tenantId) {
+      const byon = (d.byonConnections || []).find((c) => c.address === calledNumber || c.address === callerNumber);
+      if (byon) tenantId = byon.tenantId || byon.tenant_id;
+      else if ((d.tenants || []).length > 0) tenantId = d.tenants[0].id;
+    }
+  }
+
+  if (!tenantId) {
+    return core.sendJson(res, 422, { error: 'cannot resolve tenant for call', code: 'unknown_tenant' });
+  }
+
+  const now = new Date().toISOString();
+  let leadId = null;
+
+  if (callerNumber) {
+    if (db.isPostgres) {
+      try {
+        const leadRes = await db.query(
+          `INSERT INTO leads (id, tenant_id, name, phone, source, status, notes, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, 'inbound_call', $5, $6, $7, $7)
+           ON CONFLICT (tenant_id, phone) DO UPDATE SET
+             status = CASE WHEN leads.status = 'booked' THEN 'booked' ELSE EXCLUDED.status END,
+             notes = CASE WHEN EXCLUDED.notes <> '' THEN EXCLUDED.notes ELSE leads.notes END,
+             updated_at = EXCLUDED.updated_at
+           RETURNING id`,
+          [
+            core.genId('lead_'),
+            tenantId,
+            callerName,
+            callerNumber,
+            isMissed ? 'new' : 'contacted',
+            `Call disposition: ${rawDisposition}, duration: ${duration}s`,
+            now,
+          ]
+        );
+        if (leadRes.rows.length > 0) leadId = leadRes.rows[0].id;
+      } catch (err) {
+        console.error('[webhook] lead upsert error:', err.message);
+      }
+    } else {
+      await core.mutate((database) => {
+        if (!Array.isArray(database.leads)) database.leads = [];
+        let existing = database.leads.find((l) => (l.tenantId === tenantId || l.tenant_id === tenantId) && l.phone === callerNumber);
+        if (!existing) {
+          leadId = core.genId('lead_');
+          database.leads.push({
+            id: leadId,
+            tenantId,
+            name: callerName,
+            phone: callerNumber,
+            source: 'inbound_call',
+            status: isMissed ? 'new' : 'contacted',
+            notes: `Call disposition: ${rawDisposition}, duration: ${duration}s`,
+            createdAt: now,
+            updatedAt: now,
+          });
+        } else {
+          leadId = existing.id;
+          if (existing.status !== 'booked') existing.status = isMissed ? existing.status : 'contacted';
+          existing.updatedAt = now;
+        }
+      }).catch(() => {});
+    }
+  }
+
+  const costPaise = Math.round(duration * 1.5);
+  if (db.isPostgres) {
+    await db.query(
+      `INSERT INTO calls (id, tenant_id, agent_id, recording_url, transcript, duration_seconds, cost_paise, status, caller_number, lead_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       ON CONFLICT (id) DO UPDATE SET
+         status = EXCLUDED.status,
+         duration_seconds = EXCLUDED.duration_seconds,
+         recording_url = EXCLUDED.recording_url,
+         transcript = EXCLUDED.transcript`,
+      [callId, tenantId, body.agent_id || null, recordingUrl, transcript, duration, costPaise, status, callerNumber, leadId, now]
+    ).catch((err) => console.error('[webhook] call insert error:', err.message));
+  } else {
+    await core.mutate((database) => {
+      if (!Array.isArray(database.calls)) database.calls = [];
+      const existing = database.calls.find((c) => c.id === callId);
+      if (existing) {
+        existing.status = status;
+        existing.durationSeconds = duration;
+        existing.recordingUrl = recordingUrl;
+        existing.transcript = transcript;
+      } else {
+        database.calls.push({
+          id: callId,
+          tenantId,
+          agentId: body.agent_id || null,
+          recordingUrl,
+          transcript,
+          durationSeconds: duration,
+          costPaise,
+          status,
+          callerNumber,
+          leadId,
+          createdAt: now,
+        });
+      }
+    }).catch(() => {});
+  }
+
+  bumpUsage(tenantId, 'calls', 1).catch(() => {});
+
+  if (isMissed && callerNumber) {
+    let businessName = 'GetQualify';
+    if (db.isPostgres) {
+      const tRes = await db.query('SELECT name FROM tenants WHERE id = $1', [tenantId]).catch(() => ({ rows: [] }));
+      if (tRes.rows.length > 0 && tRes.rows[0].name) businessName = tRes.rows[0].name;
+    } else {
+      const t = (core.loadDb().tenants || []).find((row) => row.id === tenantId);
+      if (t && t.name) businessName = t.name;
+    }
+
+    sms.sendMissedCallTextBack(callerNumber, {
+      businessName,
+      callbackNumber: calledNumber || process.env.VOBIZ_NUMBER || '',
+    }).catch((err) => {
+      console.error('[webhook] missed-call text-back error:', err.message);
+    });
+  }
+
+  return core.sendJson(res, 200, {
+    ok: true,
+    call_id: callId,
+    status,
+    lead_id: leadId,
+  });
+}
+
+// ---- Google Calendar & Storage Integration Routes ----
+async function apiCalendarAuthUrl(req, res, ctx) {
+  try {
+    const url = calendar.getAuthUrl(ctx.tenant.id);
+    return core.sendJson(res, 200, { ok: true, authUrl: url });
+  } catch (err) {
+    return core.sendJson(res, err.status || 500, { error: err.message, code: err.code || 'calendar_error' });
+  }
+}
+
+async function apiCalendarCallback(req, res) {
+  const urlObj = new URL(req.url, 'http://localhost');
+  const code = urlObj.searchParams.get('code');
+  const stateRaw = urlObj.searchParams.get('state');
+  const error = urlObj.searchParams.get('error');
+
+  if (error) {
+    res.writeHead(302, { Location: `/app.html#settings?calendar_error=${encodeURIComponent(error)}` });
+    return res.end();
+  }
+  if (!code || !stateRaw) {
+    return core.sendJson(res, 400, { error: 'Missing code or state parameter', code: 'bad_oauth_callback' });
+  }
+
+  let tenantId = null;
+  try {
+    const stateParsed = JSON.parse(Buffer.from(stateRaw, 'base64url').toString('utf8'));
+    tenantId = stateParsed.tenantId;
+  } catch (_) {
+    return core.sendJson(res, 400, { error: 'Invalid state parameter', code: 'bad_state' });
+  }
+
+  try {
+    await calendar.exchangeCode(tenantId, code);
+    res.writeHead(302, { Location: `/app.html#settings?calendar=connected` });
+    return res.end();
+  } catch (err) {
+    res.writeHead(302, { Location: `/app.html#settings?calendar_error=${encodeURIComponent(err.message)}` });
+    return res.end();
+  }
+}
+
+async function apiCalendarDisconnect(req, res, ctx) {
+  try {
+    await calendar.disconnect(ctx.tenant.id);
+    return core.sendJson(res, 200, { ok: true, disconnected: true });
+  } catch (err) {
+    return core.sendJson(res, err.status || 500, { error: err.message, code: err.code || 'calendar_error' });
+  }
+}
+
+async function apiCalendarStatus(req, res, ctx) {
+  try {
+    const connected = await calendar.isConnected(ctx.tenant.id);
+    return core.sendJson(res, 200, { ok: true, connected, provider: connected ? 'google' : null });
+  } catch (err) {
+    return core.sendJson(res, err.status || 500, { error: err.message, code: err.code || 'calendar_error' });
+  }
+}
+
+async function apiCalendarAvailability(req, res, ctx) {
+  const urlObj = new URL(req.url, 'http://localhost');
+  const timeMin = urlObj.searchParams.get('timeMin') || new Date().toISOString();
+  const timeMax = urlObj.searchParams.get('timeMax') || new Date(Date.now() + 7 * 86400000).toISOString();
+
+  try {
+    const availability = await calendar.getAvailability(ctx.tenant.id, { timeMin, timeMax });
+    return core.sendJson(res, 200, availability);
+  } catch (err) {
+    return core.sendJson(res, err.status || 500, { error: err.message, code: err.code || 'calendar_error' });
+  }
+}
+
+async function apiCalendarBook(req, res, ctx, body = {}) {
+  const { summary, description, start, end, attendeeEmail, attendeeName, attendeePhone, leadId } = body;
+  if (!start || !end) {
+    return core.sendJson(res, 422, { error: 'start and end datetime are required', code: 'missing_time' });
+  }
+
+  try {
+    const booking = await calendar.bookAppointment(ctx.tenant.id, {
+      summary,
+      description,
+      start,
+      end,
+      attendeeEmail,
+      attendeeName,
+      attendeePhone,
+      leadId,
+    });
+    return core.sendJson(res, 200, booking);
+  } catch (err) {
+    return core.sendJson(res, err.status || 500, { error: err.message, code: err.code || 'calendar_error' });
+  }
+}
+
+async function apiCallRecordingGet(req, res, ctx, callId) {
+  try {
+    const recording = await storage.getPresignedUrl(ctx.tenant.id, callId);
+    return core.sendJson(res, 200, { ok: true, ...recording });
+  } catch (err) {
+    return core.sendJson(res, err.status || 500, { error: err.message, code: err.code || 'storage_error' });
   }
 }
 
@@ -3298,7 +3588,9 @@ const server = http.createServer(async (req, res) => {
       if (!core.rateOk(ip)) return core.sendJson(res, 429, { error: 'rate limited', code: 'rate' });
 
       const payuInbound = route === '/api/payu/callback' || route === '/api/payu/webhook' || route === '/api/payu/return';
-      if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method || '') && !payuInbound && !requestOriginAllowed(req)) {
+      const dograhWebhook = route === '/api/webhooks/dograh/call-completed';
+      const webhookInbound = payuInbound || dograhWebhook;
+      if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method || '') && !webhookInbound && !requestOriginAllowed(req)) {
         return core.sendJson(res, 403, { error: 'cross-origin request blocked', code: 'bad_origin' });
       }
       const requestContentType = String(req.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
@@ -3321,6 +3613,7 @@ const server = http.createServer(async (req, res) => {
         if (token.includes('/')) return core.sendJson(res, 404, { error: 'demo link not found', code: 'not_found' });
         return apiPublicDemoMeta(req, res, token);
       }
+      if (route === '/api/integrations/calendar/callback' && req.method === 'GET') return apiCalendarCallback(req, res);
 
       // ---- Authed GET routes ----
       if (req.method === 'GET') {
@@ -3362,6 +3655,14 @@ const server = http.createServer(async (req, res) => {
         if (route === '/api/hvac/desk') return core.requireAuth(req, res, apiHvacDesk);
         if (route === '/api/hvac/event-types') return core.requireAuth(req, res, apiHvacEventTypes);
         if (route === '/api/hvac/slots') return core.requireAuth(req, res, apiHvacSlots);
+        if (route === '/api/integrations/calendar/auth-url') return core.requireRole(req, res, 'owner', apiCalendarAuthUrl);
+        if (route === '/api/integrations/calendar/status') return core.requireAuth(req, res, apiCalendarStatus);
+        if (route === '/api/integrations/calendar/availability') return core.requireAuth(req, res, apiCalendarAvailability);
+        if (route.startsWith('/api/calls/') && route.endsWith('/recording')) {
+          const callId = decodeURIComponent(route.slice('/api/calls/'.length, -'/recording'.length));
+          if (!callId || callId.includes('/')) return core.sendJson(res, 404, { error: 'call not found', code: 'not_found' });
+          return core.requireAuth(req, res, (rq, rs, ctx) => apiCallRecordingGet(rq, rs, ctx, callId));
+        }
         return core.sendJson(res, 404, { error: 'no such endpoint', code: 'not_found' });
       }
 
@@ -3394,6 +3695,9 @@ const server = http.createServer(async (req, res) => {
           if (!leadId || leadId.includes('/')) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
           return core.requireAuth(req, res, (rq, rs, ctx) => apiLeadsDelete(rq, rs, ctx, leadId));
         }
+        if (route === '/api/integrations/calendar/disconnect') {
+          return core.requireRole(req, res, 'owner', apiCalendarDisconnect);
+        }
         return core.sendJson(res, 404, { error: 'no such endpoint', code: 'not_found' });
       }
 
@@ -3417,6 +3721,7 @@ const server = http.createServer(async (req, res) => {
       if (route === '/api/auth/login') return apiLogin(req, res, body);
       if (route === '/api/auth/logout') return apiLogout(req, res);
       if (route === '/api/auth/impersonation/exit') return core.requireAuth(req, res, apiImpersonationExit, body);
+      if (route === '/api/webhooks/dograh/call-completed') return apiWebhookDograhCallCompleted(req, res, body);
       if (route.startsWith('/api/public/demo/') && route.endsWith('/session')) {
         const token = decodeURIComponent(route.slice('/api/public/demo/'.length, -'/session'.length));
         if (token.includes('/') || !core.rateOk(`demo-start:${ip}`, 5, 5)) return core.sendJson(res, token.includes('/') ? 404 : 429, { error: token.includes('/') ? 'demo link not found' : 'too many demo starts, try again shortly', code: token.includes('/') ? 'not_found' : 'demo_rate' });
@@ -3459,6 +3764,7 @@ const server = http.createServer(async (req, res) => {
       if (route === '/api/hvac/jobs') return core.requireAuth(req, res, apiHvacJobSave, body);
       if (route === '/api/hvac/book') return core.requireAuth(req, res, apiHvacBook, body);
       if (route === '/api/leads') return core.requireAuth(req, res, apiLeadsCreate, body);
+      if (route === '/api/integrations/calendar/book') return core.requireAuth(req, res, apiCalendarBook, body);
 
       return core.sendJson(res, 404, { error: 'no such endpoint', code: 'not_found' });
     }

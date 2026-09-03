@@ -172,6 +172,7 @@ function defaultDb() {
     hvacJobs: [], hvacSettings: [], paymentEvents: [], demoLinks: [],
     invoices: [], invoiceEvents: [], integrationRequests: [], agencyPrompts: [],
     clientActivities: [], tenantStatusEvents: [], leads: [], clientSettings: [],
+    calls: [], notifications: [], callRecordings: [],
   };
 }
 
@@ -181,6 +182,7 @@ const COLLECTIONS = [
   'presets', 'byonConnections', 'hvacJobs', 'hvacSettings', 'paymentEvents', 'demoLinks',
   'invoices', 'invoiceEvents', 'integrationRequests', 'agencyPrompts',
   'clientActivities', 'tenantStatusEvents', 'leads', 'clientSettings',
+  'calls', 'notifications', 'callRecordings',
 ];
 
 function migrateDb(parsed) {
@@ -211,19 +213,26 @@ function migrateDb(parsed) {
 }
 
 let _db = null;        // in-memory cache
+let _dbTarget = null;
 let _writeChain = Promise.resolve(); // serial queue tail
 
-function ensureDataDir() {
-  try { fs.mkdirSync(path.dirname(DB_FILE), { recursive: true }); } catch (_) { }
+function getDbFile() {
+  return process.env.GETQUALIFY_DB_FILE ? path.resolve(process.env.GETQUALIFY_DB_FILE) : DB_FILE;
+}
+
+function ensureDataDir(targetFile) {
+  try { fs.mkdirSync(path.dirname(targetFile || getDbFile()), { recursive: true }); } catch (_) { }
 }
 
 // Load db.json into memory. On a missing or corrupt file, return a fresh default
 // (the caller is expected to seed and persist).
 function loadDb() {
-  if (_db) return _db;
-  ensureDataDir();
+  const targetFile = getDbFile();
+  if (_db && _dbTarget === targetFile) return _db;
+  _dbTarget = targetFile;
+  ensureDataDir(targetFile);
   try {
-    const raw = fs.readFileSync(DB_FILE, 'utf8');
+    const raw = fs.readFileSync(targetFile, 'utf8');
     const parsed = JSON.parse(raw);
     // Defensive: guarantee every collection exists even if the file is partial.
     _db = migrateDb(parsed);
@@ -235,12 +244,27 @@ function loadDb() {
 
 // Synchronous atomic flush of the current in-memory db to disk.
 function flushSync() {
-  ensureDataDir();
+  const targetFile = getDbFile();
+  const tmpFile = `${targetFile}.tmp`;
+  ensureDataDir(targetFile);
   const json = JSON.stringify(_db, null, 2);
-  fs.writeFileSync(DB_TMP, json, { mode: 0o600 });
-  fs.chmodSync(DB_TMP, 0o600);
-  fs.renameSync(DB_TMP, DB_FILE);
-  fs.chmodSync(DB_FILE, 0o600);
+  fs.writeFileSync(tmpFile, json, { mode: 0o600 });
+  try { fs.chmodSync(tmpFile, 0o600); } catch (_) {}
+  try {
+    fs.renameSync(tmpFile, targetFile);
+  } catch (err) {
+    if (process.platform === 'win32') {
+      try {
+        fs.copyFileSync(tmpFile, targetFile);
+        fs.unlinkSync(tmpFile);
+      } catch (_) {
+        throw err;
+      }
+    } else {
+      throw err;
+    }
+  }
+  try { fs.chmodSync(targetFile, 0o600); } catch (_) {}
 }
 
 /**
