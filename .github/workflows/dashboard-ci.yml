@@ -33,7 +33,7 @@ jobs:
           --health-timeout 5s
           --health-retries 5
     env:
-      DB_DRIVER: postgres
+      DB_DRIVER: json
       DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/postgres
       TEST_ROOT_DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/postgres
       CALENDAR_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -55,4 +55,6 @@ jobs:
       - run: pnpm build
       - name: Ensure PostgreSQL client tools
         run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - name: Initialize PostgreSQL schema
+        run: psql "$DATABASE_URL" -f ../schema.sql
       - run: pnpm test
