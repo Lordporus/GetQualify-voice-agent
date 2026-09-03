@@ -3,10 +3,15 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-[ -f "$ROOT/.env" ] || { echo "No .env found. Copy .env.example to .env and fill it in."; exit 1; }
-set -a; . "$ROOT/.env"; set +a
+if [ -f "$ROOT/.env" ]; then
+  set -a; . "$ROOT/.env"; set +a
+elif [ -z "${VPS_IP:-}" ] || [ -z "${SSH_KEY:-}" ]; then
+  echo "No .env found and VPS_IP / SSH_KEY not set in environment. Copy .env.example to .env or export environment variables." >&2
+  exit 1
+fi
 
-: "${VPS_IP:?VPS_IP is required in .env}"
+: "${VPS_IP:?VPS_IP is required (in .env or environment)}"
+: "${SSH_KEY:?SSH_KEY is required (in .env or environment)}"
 SSH_KEY="${SSH_KEY/#\~/$HOME}"
 DOGRAH_HOST="${DOGRAH_HOST:-$(echo "$VPS_IP" | tr '.' '-').sslip.io}"
 BASE="https://$DOGRAH_HOST"

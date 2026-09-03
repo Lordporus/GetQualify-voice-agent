@@ -15,6 +15,7 @@
     "@aws-sdk/client-s3": "^3.1125.0",
     "@aws-sdk/s3-request-presigner": "^3.1125.0",
     "@sendgrid/mail": "^8.1.6",
+    "@sentry/node": "^10.73.0",
     "googleapis": "^178.0.0",
     "pg": "^8.23.0",
     "react": "19.1.1",

@@ -215,4 +215,29 @@ async function addAuditSql(client, ctx, action, targetType, targetId, metadata =
   );
 }
 
-module.exports = { isPostgres, camelize, query, transaction, addLedgerEntrySql, addAuditSql };
+async function health(deep = false) {
+  if (!isPostgres) {
+    return { driver: 'json', ok: true };
+  }
+  if (!pool) {
+    try {
+      init();
+    } catch (err) {
+      return { driver: 'postgres', ok: false, error: err.message };
+    }
+  }
+  if (!pool) {
+    return { driver: 'postgres', ok: false, error: 'Pool uninitialized' };
+  }
+  if (!deep) {
+    return { driver: 'postgres', ok: true };
+  }
+  try {
+    const res = await pool.query('SELECT 1 AS ok');
+    return { driver: 'postgres', ok: res.rows[0].ok === 1 };
+  } catch (err) {
+    return { driver: 'postgres', ok: false, error: err.message };
+  }
+}
+
+module.exports = { isPostgres, camelize, query, transaction, addLedgerEntrySql, addAuditSql, health };

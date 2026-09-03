@@ -1,0 +1,45 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: getqualify-postgres
+    restart: unless-stopped
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-getqualify_voice}
+      POSTGRES_USER: ${POSTGRES_USER:-getqualify}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-getqualify_dev_secret}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-getqualify} -d ${POSTGRES_DB:-getqualify_voice}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    container_name: getqualify-dashboard
+    restart: unless-stopped
+    ports:
+      - "${PORT:-8787}:8787"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      PORT: 8787
+      NODE_ENV: ${NODE_ENV:-production}
+      DB_DRIVER: postgres
+      DATABASE_URL: postgresql://${POSTGRES_USER:-getqualify}:${DB_PASSWORD:-getqualify_dev_secret}@postgres:5432/${POSTGRES_DB:-getqualify_voice}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+    env_file:
+      - path: ./dashboard/.env
+        required: false
+    volumes:
+      - ./dashboard/data:/app/data
+
+volumes:
+  pgdata:

@@ -6,11 +6,13 @@ on:
       - "dashboard/**"
       - "schema.sql"
       - ".github/workflows/dashboard-ci.yml"
+      - "deploy/**"
   pull_request:
     paths:
       - "dashboard/**"
       - "schema.sql"
       - ".github/workflows/dashboard-ci.yml"
+      - "deploy/**"
 
 permissions:
   contents: read
@@ -58,3 +60,46 @@ jobs:
       - name: Initialize PostgreSQL schema
         run: psql "$DATABASE_URL" -f ../schema.sql
       - run: pnpm test
+
+  deploy:
+    needs: test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure SSH credentials
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY || secrets.SSH_KEY_PATH }}" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+          ssh-keyscan -H "${{ secrets.VPS_IP }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+      - name: Deploy Dashboard to VPS
+        run: bash deploy/06-deploy-dashboard.sh
+        env:
+          VPS_IP: ${{ secrets.VPS_IP }}
+          SSH_KEY: ~/.ssh/id_deploy
+          DASHBOARD_PORT: ${{ secrets.DASHBOARD_PORT || '8787' }}
+          DOGRAH_HOST: ${{ secrets.DOGRAH_HOST || '' }}
+          DOGRAH_BASE_URL: ${{ secrets.DOGRAH_BASE_URL || '' }}
+          DOGRAH_API_KEY: ${{ secrets.DOGRAH_API_KEY || '' }}
+          DOGRAH_WORKFLOW_ID: ${{ secrets.DOGRAH_WORKFLOW_ID || '' }}
+          DOGRAH_TELEPHONY_CONFIG_ID: ${{ secrets.DOGRAH_TELEPHONY_CONFIG_ID || '' }}
+          DOGRAH_PHONE_NUMBER_ID: ${{ secrets.DOGRAH_PHONE_NUMBER_ID || '' }}
+          DOGRAH_WEBHOOK_SECRET: ${{ secrets.DOGRAH_WEBHOOK_SECRET || '' }}
+          RUMIK_API_KEY: ${{ secrets.RUMIK_API_KEY || '' }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY || '' }}
+          GROQ_API_KEY: ${{ secrets.GROQ_API_KEY || '' }}
+          DEEPGRAM_API_KEY: ${{ secrets.DEEPGRAM_API_KEY || '' }}
+          VOBIZ_NUMBER: ${{ secrets.VOBIZ_NUMBER || '' }}
+          VOBIZ_AUTH_ID: ${{ secrets.VOBIZ_AUTH_ID || '' }}
+          VOBIZ_AUTH_TOKEN: ${{ secrets.VOBIZ_AUTH_TOKEN || '' }}
+          VOBIZ_APPLICATION_ID: ${{ secrets.VOBIZ_APPLICATION_ID || '' }}
+          MSG91_AUTH_KEY: ${{ secrets.MSG91_AUTH_KEY || '' }}
+          MSG91_SENDER_ID: ${{ secrets.MSG91_SENDER_ID || '' }}
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY || '' }}
+          VULTR_ACCESS_KEY_ID: ${{ secrets.VULTR_ACCESS_KEY_ID || '' }}
+          VULTR_SECRET_ACCESS_KEY: ${{ secrets.VULTR_SECRET_ACCESS_KEY || '' }}
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID || '' }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET || '' }}
+          CALENDAR_ENCRYPTION_KEY: ${{ secrets.CALENDAR_ENCRYPTION_KEY || '' }}
+          SENTRY_DSN: ${{ secrets.SENTRY_DSN || '' }}

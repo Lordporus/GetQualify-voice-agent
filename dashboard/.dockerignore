@@ -1,0 +1,31 @@
+# Dependencies and build artifacts
+node_modules
+npm-debug.log
+yarn-error.log
+pnpm-debug.log
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Git
+.git
+.github
+.gitignore
+
+# Tests & Coverage
+test
+coverage
+
+# Documentation and scratch files
+*.md
+!README.md
+docs
+
+# OS specific files
+.DS_Store
+Thumbs.db
+
+# Workspace files
+pnpm-workspace.yaml

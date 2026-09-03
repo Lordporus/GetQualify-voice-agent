@@ -21,6 +21,39 @@ const { WebSocketServer, WebSocket } = require('ws');
 
 const core = require('./lib/core');
 core.loadEnv();
+
+// ---- Sentry Error Tracking (optional) ----
+let Sentry = null;
+if (process.env.SENTRY_DSN) {
+  try {
+    Sentry = require('@sentry/node');
+    Sentry.init({
+      dsn: process.env.SENTRY_DSN,
+      environment: process.env.NODE_ENV || 'development',
+      tracesSampleRate: process.env.NODE_ENV === 'production' ? 0.2 : 1.0,
+      beforeSend(event) {
+        if (event && event.request && event.request.headers) {
+          delete event.request.headers['authorization'];
+          delete event.request.headers['cookie'];
+          delete event.request.headers['x-dograh-webhook-secret'];
+        }
+        return event;
+      },
+    });
+  } catch (err) {
+    console.error('Failed to initialize Sentry:', err.message);
+  }
+}
+
+process.on('unhandledRejection', (err) => {
+  if (Sentry) Sentry.captureException(err);
+  console.error('Unhandled Rejection:', err);
+});
+process.on('uncaughtException', (err) => {
+  if (Sentry) Sentry.captureException(err);
+  console.error('Uncaught Exception:', err);
+});
+
 const providers = require('./lib/providers');
 const payu = require('./lib/payu');
 const demoLinks = require('./lib/demo-links');
@@ -3537,14 +3570,24 @@ function apiProviders(req, res) {
   core.sendJson(res, 200, providers.describeProviders());
 }
 
-// GET /api/health -> readiness + which provider keys are present.
-function apiHealth(req, res) {
+// GET /api/health -> readiness + which provider keys are present + db status.
+async function apiHealth(req, res) {
+  let isDeep = false;
+  try {
+    const urlObj = new URL(req.url || '/', 'http://localhost');
+    isDeep = urlObj.searchParams.get('deep') === 'true';
+  } catch (_) {}
+  const dbStatus = await db.health(isDeep);
+
   const described = providers.describeProviders();
   const providerHealth = (layer) => Object.fromEntries((described[layer] || []).map((item) => [item.id, item.live]));
   const selected = (layer) => (described[layer] || []).find((item) => item.selected) || (described[layer] || [])[0] || {};
   const selectedStt = selected('stt'); const selectedTts = selected('tts'); const selectedLlm = selected('llm'); const selectedTelephony = selected('telephony');
-  core.sendJson(res, 200, {
-    ok: true,
+
+  const isOk = dbStatus.ok !== false;
+  core.sendJson(res, isOk ? 200 : 503, {
+    ok: isOk,
+    database: dbStatus,
     providers: {
       stt: providerHealth('stt'),
       tts: providerHealth('tts'),
@@ -3779,6 +3822,7 @@ const server = http.createServer(async (req, res) => {
     // Everything else is a static file from public/.
     core.serveStatic(req, res);
   } catch (e) {
+    if (Sentry) Sentry.captureException(e);
     core.sendJson(res, 500, { error: String((e && e.message) || e), code: 'server' });
   }
 });
@@ -3881,6 +3925,7 @@ sttWss.on('connection', (client) => {
 });
 
 server.on('error', (e) => {
+  if (Sentry) Sentry.captureException(e);
   if (e.code === 'EADDRINUSE') {
     console.error(`\n  PORT ${PORT} is already in use. Stop the other process or set PORT to a free port, for example: PORT=8788 node server.js\n`);
     process.exit(1);
@@ -3901,6 +3946,7 @@ boot().then(() => {
     console.log(`  Providers : deepgram ${flag('stt', 'deepgram')}  groq ${flag('llm', 'groq')}  rumik ${flag('tts', 'rumik')}  vobiz ${flag('telephony', 'vobiz')}\n`);
   });
 }).catch((e) => {
+  if (Sentry) Sentry.captureException(e);
   console.error('  boot failed:', e.message);
   process.exit(1);
 });
