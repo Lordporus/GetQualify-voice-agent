@@ -36,6 +36,8 @@ jobs:
       DB_DRIVER: postgres
       DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/postgres
       TEST_ROOT_DATABASE_URL: postgresql://postgres:postgrespassword@localhost:5432/postgres
+      CALENDAR_ENCRYPTION_KEY: 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+      DOGRAH_WEBHOOK_SECRET: ci-webhook-secret-12345
     defaults:
       run:
         working-directory: dashboard
@@ -51,4 +53,6 @@ jobs:
           cache-dependency-path: dashboard/pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
       - run: pnpm build
+      - name: Ensure PostgreSQL client tools
+        run: sudo apt-get update && sudo apt-get install -y postgresql-client
       - run: pnpm test
