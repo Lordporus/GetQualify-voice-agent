@@ -1,5 +1,5 @@
 -- Core schema for GetQualify Voice
-CREATE TABLE tenants (
+CREATE TABLE IF NOT EXISTS tenants (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   slug TEXT UNIQUE NOT NULL,
@@ -12,7 +12,7 @@ CREATE TABLE tenants (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE users (
+CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   email TEXT UNIQUE NOT NULL,
@@ -23,7 +23,7 @@ CREATE TABLE users (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE agents (
+CREATE TABLE IF NOT EXISTS agents (
   id TEXT PRIMARY KEY,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
@@ -35,7 +35,7 @@ CREATE TABLE agents (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE calls (
+CREATE TABLE IF NOT EXISTS calls (
   id TEXT PRIMARY KEY,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
@@ -48,7 +48,7 @@ CREATE TABLE calls (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE usage (
+CREATE TABLE IF NOT EXISTS usage (
   id SERIAL PRIMARY KEY,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   day DATE NOT NULL,
@@ -58,7 +58,7 @@ CREATE TABLE usage (
   UNIQUE(tenant_id, day)
 );
 
-CREATE TABLE sessions (
+CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY,
   user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
@@ -67,7 +67,7 @@ CREATE TABLE sessions (
   impersonation_reason TEXT
 );
 
-CREATE TABLE wallets (
+CREATE TABLE IF NOT EXISTS wallets (
   id TEXT PRIMARY KEY,
   tenant_id TEXT UNIQUE REFERENCES tenants(id) ON DELETE CASCADE,
   currency TEXT DEFAULT 'INR',
@@ -76,7 +76,7 @@ CREATE TABLE wallets (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE ledger (
+CREATE TABLE IF NOT EXISTS ledger (
   id TEXT PRIMARY KEY,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   type TEXT NOT NULL,
@@ -88,7 +88,7 @@ CREATE TABLE ledger (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE invoices (
+CREATE TABLE IF NOT EXISTS invoices (
   id TEXT PRIMARY KEY,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   invoice_number TEXT UNIQUE,
@@ -106,7 +106,7 @@ CREATE TABLE invoices (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE audit_events (
+CREATE TABLE IF NOT EXISTS audit_events (
   id TEXT PRIMARY KEY,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   actor_user_id TEXT,
@@ -119,7 +119,7 @@ CREATE TABLE audit_events (
 );
 
 -- Client settings and notifications (Phase 1 Additions)
-CREATE TABLE client_settings (
+CREATE TABLE IF NOT EXISTS client_settings (
   tenant_id TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
   industry TEXT,
   timezone TEXT DEFAULT 'Asia/Kolkata',
@@ -131,7 +131,7 @@ CREATE TABLE client_settings (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE notifications (
+CREATE TABLE IF NOT EXISTS notifications (
   id TEXT PRIMARY KEY,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   type TEXT NOT NULL,
@@ -142,7 +142,7 @@ CREATE TABLE notifications (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE call_recordings (
+CREATE TABLE IF NOT EXISTS call_recordings (
   id TEXT PRIMARY KEY,
   call_id TEXT REFERENCES calls(id) ON DELETE CASCADE,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
@@ -152,19 +152,39 @@ CREATE TABLE call_recordings (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- Extra tables needed based on legacy JSON schema
-CREATE TABLE payment_intents (
-  id TEXT PRIMARY KEY,
-  tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
-  amount_paise INTEGER NOT NULL,
-  currency TEXT DEFAULT 'INR',
-  pack_id TEXT,
-  status TEXT DEFAULT 'created',
-  txnid TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW()
+-- Payment and billing tables
+CREATE TABLE IF NOT EXISTS payment_intents (
+  id              TEXT PRIMARY KEY,
+  tenant_id       TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  user_id         TEXT REFERENCES users(id) ON DELETE SET NULL,
+  provider        TEXT DEFAULT 'payu',
+  txnid           TEXT,
+  pack_id         TEXT,
+  product_info    TEXT,
+  amount          NUMERIC(10, 2),
+  amount_paise    INTEGER NOT NULL,
+  credits         INTEGER DEFAULT 0,
+  customer        JSONB DEFAULT '{}',
+  gateway_payload JSONB DEFAULT '{}',
+  intent_token    TEXT,
+  payu_id         TEXT,
+  status          TEXT DEFAULT 'created',
+  created_at      TIMESTAMPTZ DEFAULT NOW(),
+  updated_at      TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE payment_events (
+ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS user_id TEXT REFERENCES users(id) ON DELETE SET NULL;
+ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS provider TEXT DEFAULT 'payu';
+ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS product_info TEXT;
+ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS amount NUMERIC(10, 2);
+ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS credits INTEGER DEFAULT 0;
+ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS customer JSONB DEFAULT '{}';
+ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS gateway_payload JSONB DEFAULT '{}';
+ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS intent_token TEXT;
+ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS payu_id TEXT;
+ALTER TABLE payment_intents ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW();
+
+CREATE TABLE IF NOT EXISTS payment_events (
   id TEXT PRIMARY KEY,
   provider TEXT,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
@@ -176,7 +196,7 @@ CREATE TABLE payment_events (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE support_tickets (
+CREATE TABLE IF NOT EXISTS support_tickets (
   id TEXT PRIMARY KEY,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   subject TEXT NOT NULL,
@@ -188,7 +208,7 @@ CREATE TABLE support_tickets (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE support_messages (
+CREATE TABLE IF NOT EXISTS support_messages (
   id TEXT PRIMARY KEY,
   ticket_id TEXT REFERENCES support_tickets(id) ON DELETE CASCADE,
   user_id TEXT,
@@ -196,9 +216,7 @@ CREATE TABLE support_messages (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-DROP TABLE IF EXISTS demo_links;
-
-CREATE TABLE demo_links (
+CREATE TABLE IF NOT EXISTS demo_links (
   id TEXT PRIMARY KEY,
   token_hash TEXT UNIQUE NOT NULL,
   tenant_id TEXT REFERENCES tenants(id) ON DELETE CASCADE,
@@ -215,26 +233,26 @@ CREATE TABLE demo_links (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE INDEX idx_demo_links_tenant ON demo_links(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_demo_links_tenant ON demo_links(tenant_id);
 
 -- Indexes for multi-tenant queries
-CREATE INDEX idx_users_tenant ON users(tenant_id);
-CREATE INDEX idx_agents_tenant ON agents(tenant_id);
-CREATE INDEX idx_calls_tenant ON calls(tenant_id);
-CREATE INDEX idx_usage_tenant_day ON usage(tenant_id, day);
-CREATE INDEX idx_sessions_exp ON sessions(exp);
-CREATE INDEX idx_sessions_tenant ON sessions(tenant_id);
-CREATE INDEX idx_sessions_user ON sessions(user_id);
-CREATE INDEX idx_invoices_tenant ON invoices(tenant_id);
-CREATE INDEX idx_audit_tenant ON audit_events(tenant_id);
-CREATE INDEX idx_ledger_tenant ON ledger(tenant_id);
-CREATE INDEX idx_notifications_tenant ON notifications(tenant_id);
-CREATE INDEX idx_call_recordings_tenant ON call_recordings(tenant_id);
-CREATE INDEX idx_call_recordings_call ON call_recordings(call_id);
-CREATE INDEX idx_payment_intents_tenant ON payment_intents(tenant_id);
-CREATE INDEX idx_payment_events_tenant ON payment_events(tenant_id);
-CREATE INDEX idx_support_tickets_tenant ON support_tickets(tenant_id);
-CREATE INDEX idx_support_messages_ticket ON support_messages(ticket_id);
+CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_agents_tenant ON agents(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_calls_tenant ON calls(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_usage_tenant_day ON usage(tenant_id, day);
+CREATE INDEX IF NOT EXISTS idx_sessions_exp ON sessions(exp);
+CREATE INDEX IF NOT EXISTS idx_sessions_tenant ON sessions(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);
+CREATE INDEX IF NOT EXISTS idx_invoices_tenant ON invoices(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_audit_tenant ON audit_events(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_ledger_tenant ON ledger(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_tenant ON notifications(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_call_recordings_tenant ON call_recordings(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_call_recordings_call ON call_recordings(call_id);
+CREATE INDEX IF NOT EXISTS idx_payment_intents_tenant ON payment_intents(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_payment_events_tenant ON payment_events(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_support_tickets_tenant ON support_tickets(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_support_messages_ticket ON support_messages(ticket_id);
 
 -- =============================================================================
 -- Extended tables (approved 2026-09-01): presets, byon_connections, hvac_jobs,
@@ -242,7 +260,7 @@ CREATE INDEX idx_support_messages_ticket ON support_messages(ticket_id);
 -- tenant_status_events, client_activities
 -- =============================================================================
 
-CREATE TABLE presets (
+CREATE TABLE IF NOT EXISTS presets (
   id          TEXT PRIMARY KEY,
   tenant_id   TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   slug        TEXT,
@@ -256,9 +274,9 @@ CREATE TABLE presets (
   guardrails  JSONB DEFAULT '[]',
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_presets_tenant ON presets(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_presets_tenant ON presets(tenant_id);
 
-CREATE TABLE byon_connections (
+CREATE TABLE IF NOT EXISTS byon_connections (
   id          TEXT PRIMARY KEY,
   tenant_id   TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   provider    TEXT NOT NULL,
@@ -269,9 +287,9 @@ CREATE TABLE byon_connections (
   created_by  TEXT,
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_byon_tenant ON byon_connections(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_byon_tenant ON byon_connections(tenant_id);
 
-CREATE TABLE hvac_jobs (
+CREATE TABLE IF NOT EXISTS hvac_jobs (
   id           TEXT PRIMARY KEY,
   tenant_id    TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   caller_name  TEXT,
@@ -286,15 +304,15 @@ CREATE TABLE hvac_jobs (
   created_at   TIMESTAMPTZ DEFAULT NOW(),
   updated_at   TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_hvac_jobs_tenant ON hvac_jobs(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_hvac_jobs_tenant ON hvac_jobs(tenant_id);
 
-CREATE TABLE hvac_settings (
+CREATE TABLE IF NOT EXISTS hvac_settings (
   tenant_id  TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
   settings   JSONB DEFAULT '{}',
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE invoice_events (
+CREATE TABLE IF NOT EXISTS invoice_events (
   id            TEXT PRIMARY KEY,
   tenant_id     TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   invoice_id    TEXT REFERENCES invoices(id) ON DELETE CASCADE,
@@ -302,10 +320,10 @@ CREATE TABLE invoice_events (
   actor_user_id TEXT,
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_invoice_events_tenant  ON invoice_events(tenant_id);
-CREATE INDEX idx_invoice_events_invoice ON invoice_events(invoice_id);
+CREATE INDEX IF NOT EXISTS idx_invoice_events_tenant  ON invoice_events(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_invoice_events_invoice ON invoice_events(invoice_id);
 
-CREATE TABLE integration_requests (
+CREATE TABLE IF NOT EXISTS integration_requests (
   id             TEXT PRIMARY KEY,
   tenant_id      TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   integration_id TEXT NOT NULL,
@@ -313,9 +331,9 @@ CREATE TABLE integration_requests (
   created_by     TEXT,
   created_at     TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_integration_requests_tenant ON integration_requests(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_integration_requests_tenant ON integration_requests(tenant_id);
 
-CREATE TABLE agency_prompts (
+CREATE TABLE IF NOT EXISTS agency_prompts (
   tenant_id  TEXT PRIMARY KEY REFERENCES tenants(id) ON DELETE CASCADE,
   text       TEXT NOT NULL,
   version    INTEGER DEFAULT 1,
@@ -323,7 +341,7 @@ CREATE TABLE agency_prompts (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE tenant_status_events (
+CREATE TABLE IF NOT EXISTS tenant_status_events (
   id            TEXT PRIMARY KEY,
   tenant_id     TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   from_status   TEXT,
@@ -332,9 +350,9 @@ CREATE TABLE tenant_status_events (
   actor_user_id TEXT,
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_tenant_status_events_tenant ON tenant_status_events(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_tenant_status_events_tenant ON tenant_status_events(tenant_id);
 
-CREATE TABLE client_activities (
+CREATE TABLE IF NOT EXISTS client_activities (
   id            TEXT PRIMARY KEY,
   tenant_id     TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   type          TEXT NOT NULL,
@@ -344,9 +362,9 @@ CREATE TABLE client_activities (
   actor_user_id TEXT,
   created_at    TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_client_activities_tenant ON client_activities(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_client_activities_tenant ON client_activities(tenant_id);
 
-CREATE TABLE leads (
+CREATE TABLE IF NOT EXISTS leads (
   id           TEXT PRIMARY KEY,
   tenant_id    TEXT REFERENCES tenants(id) ON DELETE CASCADE,
   name         TEXT,
@@ -359,11 +377,11 @@ CREATE TABLE leads (
   created_at   TIMESTAMPTZ DEFAULT NOW(),
   updated_at   TIMESTAMPTZ DEFAULT NOW()
 );
-CREATE INDEX idx_leads_tenant ON leads(tenant_id);
-CREATE UNIQUE INDEX idx_leads_phone ON leads(tenant_id, phone);
+CREATE INDEX IF NOT EXISTS idx_leads_tenant ON leads(tenant_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_leads_phone ON leads(tenant_id, phone);
 
-ALTER TABLE calls     ADD COLUMN lead_id TEXT REFERENCES leads(id) ON DELETE SET NULL;
-ALTER TABLE hvac_jobs ADD COLUMN lead_id TEXT REFERENCES leads(id) ON DELETE SET NULL;
+ALTER TABLE calls     ADD COLUMN IF NOT EXISTS lead_id TEXT REFERENCES leads(id) ON DELETE SET NULL;
+ALTER TABLE hvac_jobs ADD COLUMN IF NOT EXISTS lead_id TEXT REFERENCES leads(id) ON DELETE SET NULL;
 
 -- =============================================================================
 -- Phase 7: Enhanced CRM pipeline fields (additive ALTER, safe to re-run)

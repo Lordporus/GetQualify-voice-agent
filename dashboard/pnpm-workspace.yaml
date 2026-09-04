@@ -1,5 +1,6 @@
 allowBuilds:
   esbuild: true
+  msgpackr-extract: true
 minimumReleaseAgeExclude:
   - '@aws-sdk/client-s3@3.1125.0'
   - '@aws-sdk/s3-request-presigner@3.1125.0'

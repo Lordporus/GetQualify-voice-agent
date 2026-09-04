@@ -53,6 +53,8 @@ services:
       REDIS_URL: redis://redis:6379
       SENTRY_DSN: ${SENTRY_DSN:-}
     env_file:
+      - path: ./.env
+        required: false
       - path: ./dashboard/.env
         required: false
     volumes:

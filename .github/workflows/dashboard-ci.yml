@@ -100,6 +100,15 @@ jobs:
           VPS_IP: ${{ secrets.VPS_IP }}
           SSH_KEY: ~/.ssh/id_deploy
           DASHBOARD_PORT: ${{ secrets.DASHBOARD_PORT || '8787' }}
+          DB_DRIVER: ${{ secrets.DB_DRIVER || 'postgres' }}
+          DATABASE_URL: ${{ secrets.DATABASE_URL || '' }}
+          POSTGRES_USER: ${{ secrets.POSTGRES_USER || 'getqualify' }}
+          POSTGRES_DB: ${{ secrets.POSTGRES_DB || 'getqualify_voice' }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD || '' }}
+          REDIS_URL: ${{ secrets.REDIS_URL || 'redis://redis:6379' }}
+          PUBLIC_ORIGIN: ${{ secrets.PUBLIC_ORIGIN || '' }}
+          GETQUALIFY_PUBLIC_URL: ${{ secrets.GETQUALIFY_PUBLIC_URL || '' }}
+          TRUST_PROXY: '1'
           DOGRAH_HOST: ${{ secrets.DOGRAH_HOST || '' }}
           DOGRAH_BASE_URL: ${{ secrets.DOGRAH_BASE_URL || '' }}
           DOGRAH_API_KEY: ${{ secrets.DOGRAH_API_KEY || '' }}
@@ -124,3 +133,11 @@ jobs:
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET || '' }}
           CALENDAR_ENCRYPTION_KEY: ${{ secrets.CALENDAR_ENCRYPTION_KEY || '' }}
           SENTRY_DSN: ${{ secrets.SENTRY_DSN || '' }}
+          RAZORPAY_WEBHOOK_SECRET: ${{ secrets.RAZORPAY_WEBHOOK_SECRET || '' }}
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID || '' }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN || '' }}
+          TWILIO_FROM_NUMBER: ${{ secrets.TWILIO_FROM_NUMBER || '' }}
+          WHATSAPP_ACCESS_TOKEN: ${{ secrets.WHATSAPP_ACCESS_TOKEN || '' }}
+          WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID || '' }}
+          WHATSAPP_APP_SECRET: ${{ secrets.WHATSAPP_APP_SECRET || '' }}
+          WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '' }}

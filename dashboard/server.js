@@ -1610,10 +1610,7 @@ async function apiDemoLinksCreate(req, res, ctx) {
         'INSERT INTO demo_links (id, token_hash, tenant_id, agent_id, label, status, starts, max_starts, max_session_seconds, expires_at, revoked_at, revoked_by, created_by, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)',
         [link.id, link.tokenHash, link.tenantId, link.agentId, link.label, link.status, link.starts, link.maxStarts, link.maxSessionSeconds, link.expiresAt, link.revokedAt, link.revokedBy, link.createdBy, link.createdAt]
       );
-      await client.query(
-        'INSERT INTO audit_events (id, tenant_id, user_id, action, resource_type, resource_id, metadata, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        [core.genId('au_'), ctx.tenant.id, ctx.user.id, 'demo_link.created', 'demo_link', link.id, { agentId: agent.id, expiresAt: link.expiresAt, maxStarts: link.maxStarts }, new Date().toISOString()]
-      );
+      await db.addAuditSql(client, ctx, 'demo_link.created', 'demo_link', link.id, { agentId: agent.id, expiresAt: link.expiresAt, maxStarts: link.maxStarts });
     });
   } else {
     await core.mutate((database) => {
@@ -1633,10 +1630,7 @@ async function apiDemoLinksRevoke(req, res, ctx) {
     if (lRes.rowCount === 0) return core.sendJson(res, 404, { error: 'demo link not found', code: 'not_found' });
     await db.transaction(async (client) => {
       await client.query('UPDATE demo_links SET status = $1, revoked_at = $2, revoked_by = $3 WHERE id = $4', ['revoked', new Date().toISOString(), ctx.user.id, id]);
-      await client.query(
-        'INSERT INTO audit_events (id, tenant_id, user_id, action, resource_type, resource_id, metadata, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
-        [core.genId('au_'), ctx.tenant.id, ctx.user.id, 'demo_link.revoked', 'demo_link', id, { agentId: lRes.rows[0].agent_id }, new Date().toISOString()]
-      );
+      await db.addAuditSql(client, ctx, 'demo_link.revoked', 'demo_link', id, { agentId: lRes.rows[0].agent_id });
     });
   } else {
     const link = core.db().demoLinks.find((item) => item.id === id && item.tenantId === ctx.tenant.id);
@@ -4519,6 +4513,17 @@ boot().then(() => {
     if (DEMO_EMAIL) console.log(`  Test login: ${DEMO_EMAIL}`);
     console.log(`  Providers : deepgram ${flag('stt', 'deepgram')}  groq ${flag('llm', 'groq')}  rumik ${flag('tts', 'rumik')}  vobiz ${flag('telephony', 'vobiz')}\n`);
   });
+
+  const shutdown = async (sig) => {
+    console.log(`\n  Received ${sig}, shutting down gracefully...`);
+    try { await queue.close(); } catch (_) {}
+    server.close(() => {
+      process.exit(0);
+    });
+    setTimeout(() => process.exit(0), 5000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }).catch((e) => {
   if (Sentry) Sentry.captureException(e);
   console.error('  boot failed:', e.message);

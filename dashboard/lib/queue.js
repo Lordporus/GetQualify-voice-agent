@@ -50,7 +50,14 @@ function init(options = {}) {
 
   try {
     redisConn = new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false });
+    redisConn.on('error', (err) => {
+      console.error('[queue:redisConn] Redis connection error:', err.message);
+    });
+
     workerConn = new Redis(redisUrl, { maxRetriesPerRequest: null, enableReadyCheck: false });
+    workerConn.on('error', (err) => {
+      console.error('[queue:workerConn] Redis worker connection error:', err.message);
+    });
 
     queue = new Queue(QUEUE_NAME, {
       connection: redisConn,
@@ -60,6 +67,9 @@ function init(options = {}) {
         removeOnComplete: true,
         removeOnFail: 100,
       },
+    });
+    queue.on('error', (err) => {
+      console.error('[queue:bullmq] Queue error:', err.message);
     });
 
     const providers = options.providers || require('./providers');
@@ -85,6 +95,10 @@ function init(options = {}) {
       connection: workerConn,
       concurrency: 5,
       limiter: { max: 5, duration: 60000 }, // 5 concurrent calls per minute
+    });
+
+    worker.on('error', (err) => {
+      console.error('[queue:worker] Worker error:', err.message);
     });
 
     worker.on('failed', (job, err) => {
