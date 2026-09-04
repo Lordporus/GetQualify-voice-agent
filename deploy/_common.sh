@@ -16,7 +16,7 @@ SSH_KEY="${SSH_KEY/#\~/$HOME}"
 DOGRAH_HOST="${DOGRAH_HOST:-$(echo "$VPS_IP" | tr '.' '-').sslip.io}"
 BASE="https://$DOGRAH_HOST"
 
-rsh() { ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no -i "$SSH_KEY" "root@$VPS_IP" "$@"; }
+rsh() { ssh -o ConnectTimeout=15 -o StrictHostKeyChecking=no -i "$SSH_KEY" "root@$VPS_IP" "export PATH=\"/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/snap/bin:\$PATH\"; $*"; }
 
 api_container() { rsh "docker ps --format '{{.Names}}' | grep dograh-api | head -1"; }
 pg_container()  { rsh "docker ps --format '{{.Names}}' | grep dograh-postgres | head -1"; }
