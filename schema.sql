@@ -365,3 +365,55 @@ CREATE UNIQUE INDEX idx_leads_phone ON leads(tenant_id, phone);
 ALTER TABLE calls     ADD COLUMN lead_id TEXT REFERENCES leads(id) ON DELETE SET NULL;
 ALTER TABLE hvac_jobs ADD COLUMN lead_id TEXT REFERENCES leads(id) ON DELETE SET NULL;
 
+-- =============================================================================
+-- Phase 7: Enhanced CRM pipeline fields (additive ALTER, safe to re-run)
+-- =============================================================================
+
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS pipeline_stage       TEXT DEFAULT 'new';
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS pipeline_updated_at  TIMESTAMPTZ;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS value_paise          INTEGER DEFAULT 0;
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS expected_close_date  DATE;
+
+CREATE INDEX IF NOT EXISTS idx_leads_pipeline_stage ON leads(tenant_id, pipeline_stage);
+CREATE INDEX IF NOT EXISTS idx_leads_assigned_to    ON leads(tenant_id, assigned_to);
+
+-- Per-lead activity timeline (notes, stage changes, assignments, calls, emails)
+CREATE TABLE IF NOT EXISTS lead_activities (
+  id            TEXT PRIMARY KEY,
+  lead_id       TEXT REFERENCES leads(id) ON DELETE CASCADE,
+  tenant_id     TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  type          TEXT NOT NULL,       -- 'note' | 'call' | 'stage_change' | 'assignment' | 'email' | 'meeting'
+  summary       TEXT,
+  metadata      JSONB DEFAULT '{}',
+  actor_user_id TEXT,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_lead_activities_lead   ON lead_activities(lead_id);
+CREATE INDEX IF NOT EXISTS idx_lead_activities_tenant ON lead_activities(tenant_id);
+
+-- Zapier/n8n outbound webhook subscriptions per tenant
+CREATE TABLE IF NOT EXISTS webhook_endpoints (
+  id            TEXT PRIMARY KEY,
+  tenant_id     TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  url           TEXT NOT NULL,
+  events        TEXT[] DEFAULT '{}',
+  secret        TEXT NOT NULL,
+  status        TEXT DEFAULT 'active',
+  failure_count INTEGER DEFAULT 0,
+  created_at    TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_webhook_endpoints_tenant ON webhook_endpoints(tenant_id);
+
+-- BullMQ outbound call audit trail
+CREATE TABLE IF NOT EXISTS outbound_jobs (
+  id           TEXT PRIMARY KEY,
+  tenant_id    TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  agent_id     TEXT REFERENCES agents(id) ON DELETE SET NULL,
+  phone_number TEXT NOT NULL,
+  scheduled_at TIMESTAMPTZ,
+  status       TEXT DEFAULT 'queued',
+  attempts     INTEGER DEFAULT 0,
+  last_error   TEXT,
+  created_at   TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_jobs_tenant ON outbound_jobs(tenant_id);

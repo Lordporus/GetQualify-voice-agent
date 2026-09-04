@@ -150,4 +150,90 @@ module.exports = {
   sendMissedCallTextBack,
   sendAppointmentConfirmation,
   sendAppointmentReminder,
+  // Phase 7: international fallback
+  sendViaTwilio,
+  sendSms,
 };
+
+/* ==========================================================================
+   Phase 7: Twilio SMS — international fallback (non-+91 numbers)
+   Uses Node core https only, no Twilio SDK.
+   ========================================================================== */
+
+/**
+ * Send SMS via Twilio REST API (Basic Auth, no SDK).
+ * @param {string} to  - E.164 number e.g. +14155552671
+ * @param {string} body - message text (max 1600 chars)
+ */
+async function sendViaTwilio(to, body) {
+  const sid = process.env.TWILIO_ACCOUNT_SID;
+  const token = process.env.TWILIO_AUTH_TOKEN;
+  const from = process.env.TWILIO_FROM_NUMBER;
+  if (!sid || !token || !from) {
+    throw new SmsError('Twilio not configured (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER missing)', 503, 'twilio_not_configured');
+  }
+
+  const params = new URLSearchParams({ To: to, From: from, Body: String(body).slice(0, 1600) });
+  const payload = params.toString();
+  const auth = Buffer.from(`${sid}:${token}`).toString('base64');
+  const path = `/2010-04-01/Accounts/${sid}/Messages.json`;
+
+  const { https } = require('https');
+  const result = await new Promise((resolve, reject) => {
+    const req = require('https').request({
+      hostname: 'api.twilio.com',
+      path,
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Authorization': `Basic ${auth}`,
+        'Content-Length': Buffer.byteLength(payload),
+      },
+    }, (resp) => {
+      let data = '';
+      resp.on('data', (c) => { data += c; });
+      resp.on('end', () => {
+        try { resolve({ status: resp.statusCode, data: JSON.parse(data) }); }
+        catch (_) { resolve({ status: resp.statusCode, data: { raw: data } }); }
+      });
+    });
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+
+  if (result.status < 200 || result.status >= 300) {
+    const msg = result.data?.message || result.data?.raw || 'Twilio API error';
+    throw new SmsError(`Twilio dispatch failed: ${msg}`, result.status >= 400 && result.status < 500 ? result.status : 502, 'upstream_sms_error', result.data);
+  }
+
+  return { status: result.status, data: result.data, to };
+}
+
+/**
+ * Unified SMS router:
+ *  - Numbers starting with +91 → MSG91 Flow API
+ *  - All other E.164 numbers → Twilio
+ *
+ * @param {string} to    - recipient phone (E.164 preferred)
+ * @param {string} text  - SMS body (up to 1600 chars)
+ */
+async function sendSms(to, text) {
+  const normalized = String(to || '').trim();
+  // Detect Indian number: +91xxxxxxxxxx or 10-digit (MSG91 path)
+  const isIndian = /^\+91/.test(normalized) || /^[6-9]\d{9}$/.test(normalized.replace(/\D/g, '').replace(/^91/, ''));
+  if (isIndian) {
+    // MSG91 free-form text: fall back to missed-call template with body substituted
+    // MSG91 doesn't support raw body SMS without a registered template.
+    // Log a warning and use Twilio if MSG91_AUTH_KEY supports transactional text.
+    const authKey = process.env.MSG91_AUTH_KEY;
+    if (authKey) {
+      const digits = normalizePhoneForMsg91(normalized);
+      const bodyBuf = Buffer.from(JSON.stringify({ sender: process.env.MSG91_SENDER_ID || 'MSGIND', route: '4', country: '91', sms: [{ message: text.slice(0, 400), to: [digits] }] }));
+      const result = await core.httpsPost('api.msg91.com', '/api/sendhttp.php', { authkey: authKey, 'Content-Type': 'application/json', 'Content-Length': bodyBuf.length }, bodyBuf).catch(() => null);
+      if (result && result.status >= 200 && result.status < 300) return { via: 'msg91', to: normalized };
+    }
+  }
+  // International or MSG91 unavailable → Twilio
+  return sendViaTwilio(normalized, text).then((r) => ({ ...r, via: 'twilio' }));
+}

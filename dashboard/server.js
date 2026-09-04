@@ -63,6 +63,8 @@ const sms = require('./lib/sms');
 const calendar = require('./lib/calendar');
 const storage = require('./lib/storage');
 const email = require('./lib/email');
+const queue = require('./lib/queue');
+const whatsapp = require('./lib/whatsapp');
 
 const PORT = parseInt(process.env.PORT || '8787', 10);
 const DEFAULT_PROVIDERS = Object.freeze({
@@ -798,6 +800,9 @@ async function apiHvacBook(req, res, ctx) {
    Leads / Lightweight CRM
    ========================================================================== */
 
+// Phase 7: Fixed pipeline stages (system-wide, not tenant-configurable)
+const PIPELINE_STAGES = ['new', 'contacted', 'qualified', 'proposal', 'negotiation', 'won', 'lost', 'closed'];
+
 function publicLead(lead) {
   if (!lead) return null;
   return {
@@ -808,6 +813,10 @@ function publicLead(lead) {
     email: lead.email || '',
     source: lead.source || 'inbound_call',
     status: lead.status || 'new',
+    pipelineStage: lead.pipelineStage || lead.pipeline_stage || 'new',
+    pipelineUpdatedAt: toIso(lead.pipelineUpdatedAt || lead.pipeline_updated_at),
+    valuePaise: typeof lead.valuePaise === 'number' ? lead.valuePaise : (typeof lead.value_paise === 'number' ? lead.value_paise : 0),
+    expectedCloseDate: lead.expectedCloseDate || lead.expected_close_date || null,
     notes: lead.notes || '',
     assignedTo: lead.assignedTo || lead.assigned_to || '',
     createdAt: toIso(lead.createdAt || lead.created_at),
@@ -819,36 +828,49 @@ async function apiLeadsList(req, res, ctx) {
   const q = new URL(req.url, 'http://local').searchParams;
   const status = q.get('status') ? String(q.get('status')).trim() : null;
   const source = q.get('source') ? String(q.get('source')).trim() : null;
+  // Phase 7: new filters
+  const pipelineStage = q.get('pipeline_stage') ? String(q.get('pipeline_stage')).trim() : null;
+  const assignedTo = q.get('assigned_to') ? String(q.get('assigned_to')).trim() : null;
+  const search = q.get('search') ? String(q.get('search')).trim() : null;
+  const sortBy = ['created_at', 'updated_at', 'pipeline_updated_at'].includes(q.get('sort_by')) ? q.get('sort_by') : 'created_at';
   const page = Math.max(1, parseInt(q.get('page') || '1', 10) || 1);
   const limit = Math.min(100, Math.max(1, parseInt(q.get('limit') || '50', 10) || 50));
   const offset = (page - 1) * limit;
 
   if (db.isPostgres) {
-    if (status) {
-      const { rows } = await db.query(
-        'SELECT * FROM leads WHERE tenant_id = $1 AND status = $2 ORDER BY created_at DESC',
-        [ctx.tenant.id, status]
-      );
-      let resRows = rows;
-      if (source) resRows = resRows.filter((r) => r.source === source);
-      const paged = resRows.slice(offset, offset + limit);
-      return core.sendJson(res, 200, { leads: paged.map(publicLead), page, limit, total: resRows.length });
-    } else {
-      const { rows } = await db.query(
-        'SELECT * FROM leads WHERE tenant_id = $1 ORDER BY created_at DESC',
-        [ctx.tenant.id]
-      );
-      let resRows = rows;
-      if (source) resRows = resRows.filter((r) => r.source === source);
-      const paged = resRows.slice(offset, offset + limit);
-      return core.sendJson(res, 200, { leads: paged.map(publicLead), page, limit, total: resRows.length });
+    const conditions = ['tenant_id = $1'];
+    const params = [ctx.tenant.id];
+    if (status) { params.push(status); conditions.push(`status = $${params.length}`); }
+    if (source) { params.push(source); conditions.push(`source = $${params.length}`); }
+    if (pipelineStage) { params.push(pipelineStage); conditions.push(`pipeline_stage = $${params.length}`); }
+    if (assignedTo) { params.push(assignedTo); conditions.push(`assigned_to = $${params.length}`); }
+    if (search) {
+      const s = `%${search}%`;
+      params.push(s);
+      conditions.push(`(name ILIKE $${params.length} OR phone ILIKE $${params.length} OR email ILIKE $${params.length})`);
     }
+    const where = conditions.join(' AND ');
+    const { rows } = await db.query(`SELECT * FROM leads WHERE ${where} ORDER BY ${sortBy} DESC`, params);
+    const paged = rows.slice(offset, offset + limit);
+    return core.sendJson(res, 200, { leads: paged.map(publicLead), page, limit, total: rows.length });
   }
 
   let list = core.db().leads.filter((l) => (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id));
   if (status) list = list.filter((l) => l.status === status);
   if (source) list = list.filter((l) => l.source === source);
-  list.sort((a, b) => new Date(b.createdAt || b.created_at || 0) - new Date(a.createdAt || a.created_at || 0));
+  if (pipelineStage) list = list.filter((l) => (l.pipelineStage || l.pipeline_stage || 'new') === pipelineStage);
+  if (assignedTo) list = list.filter((l) => (l.assignedTo || l.assigned_to || '') === assignedTo);
+  if (search) {
+    const s = search.toLowerCase();
+    list = list.filter((l) =>
+      (l.name || '').toLowerCase().includes(s) ||
+      (l.phone || '').toLowerCase().includes(s) ||
+      (l.email || '').toLowerCase().includes(s)
+    );
+  }
+  const sortKey = sortBy === 'pipeline_updated_at' ? ['pipelineUpdatedAt', 'pipeline_updated_at'] :
+                  sortBy === 'updated_at' ? ['updatedAt', 'updated_at'] : ['createdAt', 'created_at'];
+  list.sort((a, b) => new Date(b[sortKey[0]] || b[sortKey[1]] || 0) - new Date(a[sortKey[0]] || a[sortKey[1]] || 0));
 
   const paged = list.slice(offset, offset + limit);
   core.sendJson(res, 200, { leads: paged.map(publicLead), page, limit, total: list.length });
@@ -962,34 +984,89 @@ async function apiLeadsPatch(req, res, ctx, id) {
     const current = existing.rows[0];
     const status = b.status !== undefined ? String(b.status).trim().slice(0, 40) : current.status;
     const notes = b.notes !== undefined ? String(b.notes).trim().slice(0, 2000) : current.notes;
-    const assignedTo = (b.assignedTo !== undefined || b.assigned_to !== undefined)
-      ? String(b.assignedTo !== undefined ? b.assignedTo : b.assigned_to).trim().slice(0, 80)
-      : (current.assignedTo || current.assigned_to || '');
     const name = b.name !== undefined ? String(b.name).trim().slice(0, 120) : current.name;
     const email = b.email !== undefined ? String(b.email).trim().toLowerCase().slice(0, 180) : current.email;
+    const oldAssigned = current.assigned_to || '';
+    const assignedTo = (b.assignedTo !== undefined || b.assigned_to !== undefined)
+      ? String(b.assignedTo !== undefined ? b.assignedTo : b.assigned_to).trim().slice(0, 80)
+      : oldAssigned;
+    // Phase 7: pipeline fields
+    const oldStage = current.pipeline_stage || 'new';
+    const newStage = b.pipelineStage !== undefined ? String(b.pipelineStage).trim().slice(0, 40) : (b.pipeline_stage !== undefined ? String(b.pipeline_stage).trim().slice(0, 40) : oldStage);
+    const stageChanged = newStage !== oldStage;
+    const pipelineUpdatedAt = stageChanged ? now : (current.pipeline_updated_at || null);
+    const valuePaise = b.valuePaise !== undefined ? Math.max(0, parseInt(b.valuePaise, 10) || 0) : (b.value_paise !== undefined ? Math.max(0, parseInt(b.value_paise, 10) || 0) : (current.value_paise || 0));
+    const expectedCloseDate = b.expectedCloseDate !== undefined ? (b.expectedCloseDate || null) : (b.expected_close_date !== undefined ? (b.expected_close_date || null) : (current.expected_close_date || null));
+
+    if (newStage && !PIPELINE_STAGES.includes(newStage)) {
+      return core.sendJson(res, 422, { error: `invalid pipeline_stage. Must be one of: ${PIPELINE_STAGES.join(', ')}`, code: 'invalid_pipeline_stage' });
+    }
 
     const { rows } = await db.query(
       `UPDATE leads
-       SET status = $1, notes = $2, assigned_to = $3, name = $4, email = $5, updated_at = $6
-       WHERE id = $7 AND tenant_id = $8
+       SET status = $1, notes = $2, assigned_to = $3, name = $4, email = $5, updated_at = $6,
+           pipeline_stage = $7, pipeline_updated_at = $8, value_paise = $9, expected_close_date = $10
+       WHERE id = $11 AND tenant_id = $12
        RETURNING *`,
-      [status, notes, assignedTo, name, email, now, id, ctx.tenant.id]
+      [status, notes, assignedTo, name, email, now, newStage, pipelineUpdatedAt, valuePaise, expectedCloseDate, id, ctx.tenant.id]
     );
-    return core.sendJson(res, 200, { lead: publicLead(rows[0]) });
+    const updatedLead = rows[0];
+    // Auto-log stage change activity
+    if (stageChanged) {
+      const actId = core.genId('lact_');
+      await db.query(
+        `INSERT INTO lead_activities (id, lead_id, tenant_id, type, summary, metadata, actor_user_id, created_at)
+         VALUES ($1, $2, $3, 'stage_change', $4, $5, $6, $7)`,
+        [actId, id, ctx.tenant.id, `Stage changed from ${oldStage} to ${newStage}`, JSON.stringify({ from: oldStage, to: newStage }), ctx.user.id, now]
+      );
+    }
+    // Auto-log assignment change
+    if (assignedTo !== oldAssigned) {
+      const actId = core.genId('lact_');
+      await db.query(
+        `INSERT INTO lead_activities (id, lead_id, tenant_id, type, summary, metadata, actor_user_id, created_at)
+         VALUES ($1, $2, $3, 'assignment', $4, $5, $6, $7)`,
+        [actId, id, ctx.tenant.id, `Assigned to ${assignedTo || 'unassigned'}`, JSON.stringify({ from: oldAssigned, to: assignedTo }), ctx.user.id, now]
+      );
+    }
+    return core.sendJson(res, 200, { lead: publicLead(updatedLead) });
   }
 
   let lead;
   await core.mutate((d) => {
     lead = d.leads.find((l) => l.id === id && (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id));
     if (!lead) return;
+    const oldStage = lead.pipelineStage || lead.pipeline_stage || 'new';
+    const oldAssigned = lead.assignedTo || lead.assigned_to || '';
     if (b.status !== undefined) lead.status = String(b.status).trim().slice(0, 40);
     if (b.notes !== undefined) lead.notes = String(b.notes).trim().slice(0, 2000);
+    if (b.name !== undefined) lead.name = String(b.name).trim().slice(0, 120);
+    if (b.email !== undefined) lead.email = String(b.email).trim().toLowerCase().slice(0, 180);
     if (b.assignedTo !== undefined || b.assigned_to !== undefined) {
       lead.assignedTo = String(b.assignedTo !== undefined ? b.assignedTo : b.assigned_to).trim().slice(0, 80);
     }
-    if (b.name !== undefined) lead.name = String(b.name).trim().slice(0, 120);
-    if (b.email !== undefined) lead.email = String(b.email).trim().toLowerCase().slice(0, 180);
+    if (b.pipelineStage !== undefined || b.pipeline_stage !== undefined) {
+      const ns = String(b.pipelineStage !== undefined ? b.pipelineStage : b.pipeline_stage).trim().slice(0, 40);
+      if (PIPELINE_STAGES.includes(ns)) {
+        if (ns !== oldStage) lead.pipelineUpdatedAt = now;
+        lead.pipelineStage = ns;
+      }
+    }
+    if (b.valuePaise !== undefined) lead.valuePaise = Math.max(0, parseInt(b.valuePaise, 10) || 0);
+    if (b.value_paise !== undefined) lead.valuePaise = Math.max(0, parseInt(b.value_paise, 10) || 0);
+    if (b.expectedCloseDate !== undefined) lead.expectedCloseDate = b.expectedCloseDate || null;
+    if (b.expected_close_date !== undefined) lead.expectedCloseDate = b.expected_close_date || null;
     lead.updatedAt = now;
+    // Auto-log activities in JSON mode (in-memory store)
+    if (!d.leadActivities) d.leadActivities = [];
+    const newStageVal = lead.pipelineStage || 'new';
+    if (newStageVal !== oldStage) {
+      d.leadActivities.push({ id: core.genId('lact_'), leadId: id, tenantId: ctx.tenant.id, type: 'stage_change', summary: `Stage changed from ${oldStage} to ${newStageVal}`, metadata: { from: oldStage, to: newStageVal }, actorUserId: ctx.user.id, createdAt: now });
+    }
+    const newAssigned = lead.assignedTo || '';
+    if (newAssigned !== oldAssigned) {
+      d.leadActivities.push({ id: core.genId('lact_'), leadId: id, tenantId: ctx.tenant.id, type: 'assignment', summary: `Assigned to ${newAssigned || 'unassigned'}`, metadata: { from: oldAssigned, to: newAssigned }, actorUserId: ctx.user.id, createdAt: now });
+    }
   });
 
   if (!lead) {
@@ -1027,6 +1104,201 @@ async function apiLeadsDelete(req, res, ctx, id) {
     return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
   }
   core.sendJson(res, 200, { success: true, lead: publicLead(lead) });
+}
+
+// Phase 7: Bulk update pipeline_stage or assigned_to for multiple leads
+async function apiLeadsBulkUpdate(req, res, ctx) {
+  const b = ctx.body || {};
+  const ids = Array.isArray(b.ids) ? b.ids.map((i) => String(i)).filter(Boolean).slice(0, 200) : [];
+  if (!ids.length) return core.sendJson(res, 422, { error: 'ids array is required', code: 'missing_ids' });
+
+  const updates = {};
+  const now = new Date().toISOString();
+  if (b.pipelineStage !== undefined || b.pipeline_stage !== undefined) {
+    const ns = String(b.pipelineStage !== undefined ? b.pipelineStage : b.pipeline_stage).trim();
+    if (!PIPELINE_STAGES.includes(ns)) {
+      return core.sendJson(res, 422, { error: `invalid pipeline_stage. Must be one of: ${PIPELINE_STAGES.join(', ')}`, code: 'invalid_pipeline_stage' });
+    }
+    updates.pipeline_stage = ns;
+    updates.pipeline_updated_at = now;
+  }
+  if (b.assignedTo !== undefined || b.assigned_to !== undefined) {
+    updates.assigned_to = String(b.assignedTo !== undefined ? b.assignedTo : b.assigned_to).trim().slice(0, 80);
+  }
+  if (!Object.keys(updates).length) return core.sendJson(res, 422, { error: 'no updatable fields provided', code: 'no_fields' });
+
+  if (db.isPostgres) {
+    const setClauses = Object.keys(updates).map((k, i) => `${k} = $${i + 2}`).join(', ');
+    const vals = Object.values(updates);
+    // Build placeholders for ids (start after now + vals + tenant_id)
+    const idPlaceholders = ids.map((_, i) => `$${vals.length + 3 + i}`).join(', ');
+    const { rowCount } = await db.query(
+      `UPDATE leads SET ${setClauses}, updated_at = $1 WHERE tenant_id = $${vals.length + 2} AND id IN (${idPlaceholders})`,
+      [now, ...vals, ctx.tenant.id, ...ids]
+    );
+    return core.sendJson(res, 200, { updated: rowCount });
+  }
+
+  let updated = 0;
+  await core.mutate((d) => {
+    for (const lead of d.leads) {
+      if ((lead.tenantId === ctx.tenant.id || lead.tenant_id === ctx.tenant.id) && ids.includes(lead.id)) {
+        if (updates.pipeline_stage) { lead.pipelineStage = updates.pipeline_stage; lead.pipelineUpdatedAt = now; }
+        if (updates.assigned_to !== undefined) lead.assignedTo = updates.assigned_to;
+        lead.updatedAt = now;
+        updated++;
+      }
+    }
+  });
+  core.sendJson(res, 200, { updated });
+}
+
+// Phase 7: CRM pipeline kanban summary — counts + total value by stage
+async function apiCrmPipeline(req, res, ctx) {
+  const byStage = {};
+  for (const s of PIPELINE_STAGES) byStage[s] = { count: 0, totalValuePaise: 0 };
+
+  if (db.isPostgres) {
+    const { rows } = await db.query(
+      `SELECT COALESCE(pipeline_stage, 'new') AS pipeline_stage,
+              COUNT(*) AS count,
+              COALESCE(SUM(value_paise), 0) AS total_value_paise
+       FROM leads WHERE tenant_id = $1 AND status != 'closed'
+       GROUP BY COALESCE(pipeline_stage, 'new')`,
+      [ctx.tenant.id]
+    );
+    for (const r of rows) {
+      const stage = PIPELINE_STAGES.includes(r.pipeline_stage) ? r.pipeline_stage : 'new';
+      const c = parseInt(r.count, 10) || 0;
+      const val = Math.max(0, parseInt(r.total_value_paise, 10) || 0);
+      if (byStage[stage]) {
+        byStage[stage].count += c;
+        byStage[stage].totalValuePaise += val;
+      }
+    }
+    return core.sendJson(res, 200, { pipeline: byStage, stages: PIPELINE_STAGES });
+  }
+
+  const leads = core.db().leads.filter((l) => (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id) && (l.status !== 'closed'));
+  for (const l of leads) {
+    const rawStage = l.pipelineStage || l.pipeline_stage;
+    const s = PIPELINE_STAGES.includes(rawStage) ? rawStage : 'new';
+    if (byStage[s]) {
+      byStage[s].count++;
+      byStage[s].totalValuePaise += Math.max(0, parseInt(l.valuePaise !== undefined ? l.valuePaise : l.value_paise, 10) || 0);
+    }
+  }
+  core.sendJson(res, 200, { pipeline: byStage, stages: PIPELINE_STAGES });
+}
+
+// Phase 7: CRM analytics — conversion rates, team perf, source breakdown, trend
+async function apiCrmAnalytics(req, res, ctx) {
+  if (db.isPostgres) {
+    const [stageRes, assigneeRes, sourceRes, monthRes, wonTimeRes] = await Promise.all([
+      db.query(`SELECT pipeline_stage, COUNT(*) AS count, COALESCE(SUM(value_paise),0) AS total_value FROM leads WHERE tenant_id=$1 GROUP BY pipeline_stage`, [ctx.tenant.id]),
+      db.query(`SELECT assigned_to, COUNT(*) AS count FROM leads WHERE tenant_id=$1 AND assigned_to IS NOT NULL AND assigned_to!='' GROUP BY assigned_to ORDER BY count DESC LIMIT 10`, [ctx.tenant.id]),
+      db.query(`SELECT source, COUNT(*) AS count FROM leads WHERE tenant_id=$1 GROUP BY source ORDER BY count DESC`, [ctx.tenant.id]),
+      db.query(`SELECT DATE_TRUNC('month', created_at) AS month, COUNT(*) AS count FROM leads WHERE tenant_id=$1 AND created_at > NOW()-INTERVAL '6 months' GROUP BY month ORDER BY month ASC`, [ctx.tenant.id]),
+      db.query(`SELECT AVG(EXTRACT(EPOCH FROM (pipeline_updated_at - created_at))/3600) AS avg_hours FROM leads WHERE tenant_id=$1 AND pipeline_stage='won' AND pipeline_updated_at IS NOT NULL`, [ctx.tenant.id]),
+    ]);
+    const total = stageRes.rows.reduce((sum, r) => sum + parseInt(r.count, 10), 0);
+    const won = (stageRes.rows.find((r) => r.pipeline_stage === 'won') || {}).count || 0;
+    const nonNew = stageRes.rows.filter((r) => r.pipeline_stage !== 'new').reduce((sum, r) => sum + parseInt(r.count, 10), 0);
+    return core.sendJson(res, 200, {
+      totalLeads: total,
+      byStage: Object.fromEntries(stageRes.rows.map((r) => [r.pipeline_stage, { count: parseInt(r.count, 10), totalValuePaise: parseInt(r.total_value, 10) }])),
+      conversionRate: nonNew > 0 ? Math.round((parseInt(won, 10) / nonNew) * 10000) / 100 : 0,
+      avgTimeToWonHours: wonTimeRes.rows[0]?.avg_hours ? Math.round(parseFloat(wonTimeRes.rows[0].avg_hours) * 10) / 10 : null,
+      topAssignees: assigneeRes.rows.map((r) => ({ assignedTo: r.assigned_to, count: parseInt(r.count, 10) })),
+      bySource: Object.fromEntries(sourceRes.rows.map((r) => [r.source, parseInt(r.count, 10)])),
+      monthlyTrend: monthRes.rows.map((r) => ({ month: r.month, count: parseInt(r.count, 10) })),
+    });
+  }
+  // JSON driver fallback
+  const leads = core.db().leads.filter((l) => (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id));
+  const byStage = {};
+  const bySource = {};
+  const byAssignee = {};
+  for (const l of leads) {
+    const s = l.pipelineStage || l.pipeline_stage || 'new';
+    const src = l.source || 'inbound_call';
+    const asgn = l.assignedTo || l.assigned_to || '';
+    byStage[s] = byStage[s] || { count: 0, totalValuePaise: 0 };
+    byStage[s].count++; byStage[s].totalValuePaise += (l.valuePaise || l.value_paise || 0);
+    bySource[src] = (bySource[src] || 0) + 1;
+    if (asgn) byAssignee[asgn] = (byAssignee[asgn] || 0) + 1;
+  }
+  const total = leads.length;
+  const won = (byStage.won || {}).count || 0;
+  const nonNew = Object.entries(byStage).filter(([k]) => k !== 'new').reduce((s, [, v]) => s + v.count, 0);
+  core.sendJson(res, 200, {
+    totalLeads: total,
+    byStage,
+    conversionRate: nonNew > 0 ? Math.round((won / nonNew) * 10000) / 100 : 0,
+    avgTimeToWonHours: null,
+    topAssignees: Object.entries(byAssignee).sort((a, b) => b[1] - a[1]).slice(0, 10).map(([k, v]) => ({ assignedTo: k, count: v })),
+    bySource,
+    monthlyTrend: [],
+  });
+}
+
+// Phase 7: Lead activity timeline — list
+async function apiLeadActivitiesList(req, res, ctx, leadId) {
+  const q = new URL(req.url, 'http://local').searchParams;
+  const page = Math.max(1, parseInt(q.get('page') || '1', 10) || 1);
+  const limit = Math.min(100, Math.max(1, parseInt(q.get('limit') || '20', 10) || 20));
+  const offset = (page - 1) * limit;
+
+  if (db.isPostgres) {
+    const exists = await db.query('SELECT id FROM leads WHERE id=$1 AND tenant_id=$2', [leadId, ctx.tenant.id]);
+    if (exists.rowCount === 0) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+    const { rows } = await db.query(
+      'SELECT * FROM lead_activities WHERE lead_id=$1 ORDER BY created_at DESC LIMIT $2 OFFSET $3',
+      [leadId, limit, offset]
+    );
+    const total = await db.query('SELECT COUNT(*) AS c FROM lead_activities WHERE lead_id=$1', [leadId]);
+    return core.sendJson(res, 200, { activities: rows, page, limit, total: parseInt(total.rows[0].c, 10) });
+  }
+  const d = core.db();
+  const lead = (d.leads || []).find((l) => l.id === leadId && (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id));
+  if (!lead) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+  const acts = ((d.leadActivities || []).filter((a) => a.leadId === leadId)).sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+  core.sendJson(res, 200, { activities: acts.slice(offset, offset + limit), page, limit, total: acts.length });
+}
+
+// Phase 7: Lead activity timeline — create (manual note/call/email/meeting)
+async function apiLeadActivitiesCreate(req, res, ctx, leadId) {
+  const b = ctx.body || {};
+  const allowedTypes = ['note', 'call', 'email', 'meeting'];
+  const type = String(b.type || '').trim();
+  if (!allowedTypes.includes(type)) {
+    return core.sendJson(res, 422, { error: `type must be one of: ${allowedTypes.join(', ')}`, code: 'invalid_type' });
+  }
+  const summary = String(b.summary || '').trim().slice(0, 2000);
+  const metadata = (b.metadata && typeof b.metadata === 'object') ? b.metadata : {};
+  const now = new Date().toISOString();
+  const actId = core.genId('lact_');
+
+  if (db.isPostgres) {
+    const exists = await db.query('SELECT id FROM leads WHERE id=$1 AND tenant_id=$2', [leadId, ctx.tenant.id]);
+    if (exists.rowCount === 0) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+    const { rows } = await db.query(
+      `INSERT INTO lead_activities (id, lead_id, tenant_id, type, summary, metadata, actor_user_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+      [actId, leadId, ctx.tenant.id, type, summary, JSON.stringify(metadata), ctx.user.id, now]
+    );
+    return core.sendJson(res, 201, { activity: rows[0] });
+  }
+  let activity;
+  await core.mutate((d) => {
+    const lead = (d.leads || []).find((l) => l.id === leadId && (l.tenantId === ctx.tenant.id || l.tenant_id === ctx.tenant.id));
+    if (!lead) return;
+    if (!d.leadActivities) d.leadActivities = [];
+    activity = { id: actId, leadId, tenantId: ctx.tenant.id, type, summary, metadata, actorUserId: ctx.user.id, createdAt: now };
+    d.leadActivities.push(activity);
+  });
+  if (!activity) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+  core.sendJson(res, 201, { activity });
 }
 
 async function apiAgentsList(req, res, ctx) {
@@ -3577,6 +3849,230 @@ function apiProviders(req, res) {
   core.sendJson(res, 200, providers.describeProviders());
 }
 
+/* ==========================================================================
+   Phase 7: Razorpay Payment Webhook
+   ========================================================================== */
+
+async function apiWebhookRazorpay(req, res, body) {
+  const secret = process.env.RAZORPAY_WEBHOOK_SECRET || '';
+  if (!secret) return core.sendJson(res, 503, { error: 'Razorpay webhook not configured', code: 'not_configured' });
+
+  const sig = req.headers['x-razorpay-signature'] || '';
+  const rawBody = typeof body === 'string' ? body : JSON.stringify(body);
+  const expectedSig = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
+  if (!sig || !crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(expectedSig))) {
+    return core.sendJson(res, 401, { error: 'invalid signature', code: 'bad_signature' });
+  }
+
+  const event = typeof body === 'string' ? JSON.parse(body) : body;
+  if (event.event !== 'payment.captured') {
+    return core.sendJson(res, 200, { ok: true, skipped: true });
+  }
+
+  const payment = event.payload?.payment?.entity;
+  if (!payment) return core.sendJson(res, 400, { error: 'missing payment entity', code: 'bad_payload' });
+
+  const amountPaise = parseInt(payment.amount, 10);
+  const tenantId = payment.notes?.tenant_id || payment.description?.match(/tenant:(\S+)/)?.[1] || null;
+  const txnid = String(payment.id || '');
+
+  if (!tenantId || !amountPaise) {
+    return core.sendJson(res, 400, { error: 'tenant_id or amount missing in payment.notes', code: 'bad_payload' });
+  }
+
+  if (db.isPostgres) {
+    // Idempotency check
+    const dup = await db.query('SELECT id FROM payment_events WHERE txnid=$1 AND provider=$2', [txnid, 'razorpay']);
+    if (dup.rowCount > 0) return core.sendJson(res, 200, { ok: true, duplicate: true });
+
+    const now = new Date().toISOString();
+    const eventId = core.genId('pev_');
+    const intentId = core.genId('pi_');
+    const invoiceId = core.genId('inv_');
+
+    await db.withTransaction(async (client) => {
+      // Credit ledger
+      await db.addLedgerEntrySql(client, tenantId, amountPaise, 'razorpay_payment', txnid, { payment_id: txnid });
+      // Record event
+      await client.query(
+        `INSERT INTO payment_events (id, provider, tenant_id, payment_intent_id, txnid, status, payload, created_at)
+         VALUES ($1, 'razorpay', $2, $3, $4, 'captured', $5, $6)`,
+        [eventId, tenantId, intentId, txnid, JSON.stringify(payment), now]
+      );
+      // Auto-create invoice
+      const invNum = `RZP-${txnid.slice(-6).toUpperCase()}`;
+      await client.query(
+        `INSERT INTO invoices (id, tenant_id, invoice_number, amount_paise, currency, status, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'INR', 'paid', $5, $5)
+         ON CONFLICT DO NOTHING`,
+        [invoiceId, tenantId, invNum, amountPaise, now]
+      );
+    });
+    // Dispatch outbound webhooks
+    await dispatchTenantWebhooks(tenantId, 'payment.captured', { txnid, amountPaise, provider: 'razorpay' });
+    return core.sendJson(res, 200, { ok: true });
+  }
+
+  // JSON driver fallback
+  return core.sendJson(res, 200, { ok: true, note: 'wallet credit requires postgres driver' });
+}
+
+/* ==========================================================================
+   Phase 7: WhatsApp Business Cloud API
+   ========================================================================== */
+
+function apiWhatsappWebhookVerify(req, res) {
+  const challenge = whatsapp.verifyChallenge(req);
+  if (!challenge) return core.sendJson(res, 403, { error: 'invalid verify token', code: 'bad_token' });
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end(challenge);
+}
+
+function apiWhatsappWebhookInbound(req, res, body) {
+  // Delivery receipts — acknowledge and no-op for now
+  core.sendJson(res, 200, { ok: true });
+}
+
+async function apiWhatsappNotify(req, res, ctx) {
+  const b = ctx.body || {};
+  const { to, templateName, languageCode, components } = b;
+  if (!to || !templateName) return core.sendJson(res, 422, { error: 'to and templateName are required', code: 'missing_fields' });
+  const result = await whatsapp.sendTemplateMessage(to, templateName, languageCode || 'en_US', components || []);
+  core.sendJson(res, 200, { ok: true, result });
+}
+
+/* ==========================================================================
+   Phase 7: BullMQ Outbound Call Queue (with offline fallback)
+   ========================================================================== */
+
+function initOutboundQueue() {
+  queue.init({ providers, db });
+}
+
+async function apiOutboundSchedule(req, res, ctx) {
+  const b = ctx.body || {};
+  const phoneNumber = String(b.phoneNumber || b.phone_number || '').trim();
+  const agentId = String(b.agentId || b.agent_id || '').trim();
+  if (!phoneNumber || !agentId) return core.sendJson(res, 422, { error: 'phoneNumber and agentId are required', code: 'missing_fields' });
+  const scheduledAt = b.scheduledAt ? new Date(b.scheduledAt) : new Date();
+  const delay = Math.max(0, scheduledAt.getTime() - Date.now());
+  const now = new Date().toISOString();
+  const jobId = core.genId('ojob_');
+
+  if (db.isPostgres) {
+    await db.query(
+      `INSERT INTO outbound_jobs (id, tenant_id, agent_id, phone_number, scheduled_at, status, created_at) VALUES ($1,$2,$3,$4,$5,'queued',$6)`,
+      [jobId, ctx.tenant.id, agentId, phoneNumber, scheduledAt.toISOString(), now]
+    );
+  }
+
+  if (!queue.isReady) {
+    return core.sendJson(res, 202, { queued: false, reason: 'redis_not_configured', jobId, note: 'REDIS_URL not set, job recorded but not scheduled' });
+  }
+
+  const qRes = await queue.scheduleCall({ agentId, tenantId: ctx.tenant.id, phoneNumber, jobDbId: jobId, delay });
+  return core.sendJson(res, 202, { queued: qRes.queued, jobId, scheduledAt: scheduledAt.toISOString() });
+}
+
+async function apiOutboundQueue(req, res, ctx) {
+  if (db.isPostgres) {
+    const { rows } = await db.query(
+      'SELECT * FROM outbound_jobs WHERE tenant_id=$1 ORDER BY created_at DESC LIMIT 100',
+      [ctx.tenant.id]
+    );
+    return core.sendJson(res, 200, { jobs: rows });
+  }
+  return core.sendJson(res, 200, { jobs: [], note: 'requires postgres driver' });
+}
+
+/* ==========================================================================
+   Phase 7: Zapier / n8n Outbound Webhook System
+   ========================================================================== */
+
+async function dispatchTenantWebhooks(tenantId, event, data) {
+  if (!db.isPostgres) return;
+  try {
+    const { rows } = await db.query(
+      `SELECT * FROM webhook_endpoints WHERE tenant_id=$1 AND status='active' AND (events='{}' OR $2=ANY(events))`,
+      [tenantId, event]
+    );
+    for (const ep of rows) {
+      const payload = JSON.stringify({ event, data, tenantId, timestamp: new Date().toISOString() });
+      const sig = crypto.createHmac('sha256', ep.secret).update(payload).digest('hex');
+      // Fire-and-forget with failure tracking
+      (async () => {
+        try {
+          const url = new URL(ep.url);
+          await new Promise((resolve, reject) => {
+            const opts = {
+              hostname: url.hostname,
+              port: url.port || (url.protocol === 'https:' ? 443 : 80),
+              path: url.pathname + url.search,
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-GetQualify-Signature': sig, 'Content-Length': Buffer.byteLength(payload) },
+            };
+            const mod = url.protocol === 'https:' ? require('https') : require('http');
+            const req = mod.request(opts, (resp) => { resp.resume(); resolve(resp.statusCode); });
+            req.on('error', reject);
+            req.setTimeout(5000, () => req.destroy());
+            req.write(payload);
+            req.end();
+          });
+          // Reset failure count on success
+          await db.query('UPDATE webhook_endpoints SET failure_count=0 WHERE id=$1', [ep.id]);
+        } catch (_) {
+          // Increment failure count; disable after 10 consecutive failures
+          await db.query(
+            `UPDATE webhook_endpoints SET failure_count=failure_count+1, status=CASE WHEN failure_count+1>=10 THEN 'failing' ELSE status END WHERE id=$1`,
+            [ep.id]
+          );
+        }
+      })().catch(() => {});
+    }
+  } catch (_) {}
+}
+
+async function apiWebhookEndpointsList(req, res, ctx) {
+  if (db.isPostgres) {
+    const { rows } = await db.query('SELECT id,url,events,status,failure_count,created_at FROM webhook_endpoints WHERE tenant_id=$1 ORDER BY created_at DESC', [ctx.tenant.id]);
+    return core.sendJson(res, 200, { endpoints: rows });
+  }
+  core.sendJson(res, 200, { endpoints: [] });
+}
+
+async function apiWebhookEndpointsCreate(req, res, ctx) {
+  const b = ctx.body || {};
+  const url = String(b.url || '').trim();
+  if (!url || !/^https?:\/\//.test(url)) return core.sendJson(res, 422, { error: 'valid url is required', code: 'missing_url' });
+  const events = Array.isArray(b.events) ? b.events.map(String).filter(Boolean) : [];
+  const secret = crypto.randomBytes(32).toString('hex');
+  const now = new Date().toISOString();
+  const id = core.genId('wep_');
+
+  if (db.isPostgres) {
+    const { rows } = await db.query(
+      `INSERT INTO webhook_endpoints (id, tenant_id, url, events, secret, status, created_at) VALUES ($1,$2,$3,$4,$5,'active',$6) RETURNING id,url,events,status,failure_count,created_at`,
+      [id, ctx.tenant.id, url, events, secret, now]
+    );
+    return core.sendJson(res, 201, { endpoint: rows[0], secret });
+  }
+  core.sendJson(res, 201, { endpoint: { id, url, events, status: 'active' }, secret, note: 'requires postgres driver to persist' });
+}
+
+async function apiWebhookEndpointsDelete(req, res, ctx, id) {
+  if (db.isPostgres) {
+    const { rowCount } = await db.query('DELETE FROM webhook_endpoints WHERE id=$1 AND tenant_id=$2', [id, ctx.tenant.id]);
+    if (rowCount === 0) return core.sendJson(res, 404, { error: 'endpoint not found', code: 'not_found' });
+    return core.sendJson(res, 200, { ok: true });
+  }
+  core.sendJson(res, 200, { ok: true });
+}
+
+/* ==========================================================================
+   Phase 7: Twilio SMS international fallback (injected into lib/sms.js style)
+   ========================================================================== */
+// The actual extension lives in lib/sms.js. This stub is here for completeness.
+
 // GET /api/health -> readiness + which provider keys are present + db status.
 async function apiHealth(req, res) {
   let isDeep = false;
@@ -3646,7 +4142,9 @@ const server = http.createServer(async (req, res) => {
 
       const payuInbound = route === '/api/payu/callback' || route === '/api/payu/webhook' || route === '/api/payu/return';
       const dograhWebhook = route === '/api/webhooks/dograh/call-completed';
-      const webhookInbound = payuInbound || dograhWebhook;
+      const razorpayWebhook = route === '/api/webhooks/razorpay';
+      const whatsappWebhook = route === '/api/webhooks/whatsapp';
+      const webhookInbound = payuInbound || dograhWebhook || razorpayWebhook || whatsappWebhook;
       if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method || '') && !webhookInbound && !requestOriginAllowed(req)) {
         return core.sendJson(res, 403, { error: 'cross-origin request blocked', code: 'bad_origin' });
       }
@@ -3687,11 +4185,26 @@ const server = http.createServer(async (req, res) => {
       // ---- Authed GET routes ----
       if (req.method === 'GET') {
         if (route === '/api/leads') return core.requireAuth(req, res, apiLeadsList);
+        if (route === '/api/leads/bulk') return core.sendJson(res, 405, { error: 'use POST /api/leads/bulk', code: 'method' });
         if (route.startsWith('/api/leads/')) {
-          const leadId = decodeURIComponent(route.slice('/api/leads/'.length));
-          if (!leadId || leadId.includes('/')) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
-          return core.requireAuth(req, res, (rq, rs, ctx) => apiLeadsGet(rq, rs, ctx, leadId));
+          const leadSub = decodeURIComponent(route.slice('/api/leads/'.length));
+          // /api/leads/:id/activities
+          if (leadSub.endsWith('/activities') && !leadSub.slice(0, -'/activities'.length).includes('/')) {
+            const leadId = leadSub.slice(0, -'/activities'.length);
+            return core.requireAuth(req, res, (rq, rs, ctx) => apiLeadActivitiesList(rq, rs, ctx, leadId));
+          }
+          if (!leadSub || leadSub.includes('/')) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+          return core.requireAuth(req, res, (rq, rs, ctx) => apiLeadsGet(rq, rs, ctx, leadSub));
         }
+        // Phase 7: CRM routes
+        if (route === '/api/crm/pipeline') return core.requireAuth(req, res, apiCrmPipeline);
+        if (route === '/api/crm/analytics') return core.requireAuth(req, res, apiCrmAnalytics);
+        // Phase 7: Outbound telephony queue
+        if (route === '/api/telephony/outbound/queue') return core.requireRole(req, res, 'owner', apiOutboundQueue);
+        // Phase 7: Webhook endpoints management
+        if (route === '/api/webhooks/endpoints') return core.requireRole(req, res, 'owner', apiWebhookEndpointsList);
+        // Phase 7: WhatsApp webhook verification
+        if (route === '/api/webhooks/whatsapp') return apiWhatsappWebhookVerify(req, res);
         if (route === '/api/me') return core.requireAuth(req, res, apiMe);
         if (route === '/api/agents') return core.requireAuth(req, res, apiAgentsList);
         if (route === '/api/usage') return core.requireAuth(req, res, apiUsage);
@@ -3746,9 +4259,13 @@ const server = http.createServer(async (req, res) => {
           });
         }
         if (route.startsWith('/api/leads/')) {
-          const leadId = decodeURIComponent(route.slice('/api/leads/'.length));
-          if (!leadId || leadId.includes('/')) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
-          return core.requireAuth(req, res, (rq, rs, ctx) => apiLeadsPatch(rq, rs, ctx, leadId), body);
+          const leadSub = decodeURIComponent(route.slice('/api/leads/'.length));
+          if (leadSub.endsWith('/activities') && !leadSub.slice(0, -'/activities'.length).includes('/')) {
+            const leadId = leadSub.slice(0, -'/activities'.length);
+            return core.requireAuth(req, res, (rq, rs, ctx) => apiLeadActivitiesCreate(rq, rs, ctx, leadId), body);
+          }
+          if (!leadSub || leadSub.includes('/')) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
+          return core.requireAuth(req, res, (rq, rs, ctx) => apiLeadsPatch(rq, rs, ctx, leadSub), body);
         }
         if (route.startsWith('/api/admin/tenants/') && route.endsWith('/settings')) {
           const tenantId = decodeURIComponent(route.slice('/api/admin/tenants/'.length, -'/settings'.length));
@@ -3763,6 +4280,12 @@ const server = http.createServer(async (req, res) => {
           const leadId = decodeURIComponent(route.slice('/api/leads/'.length));
           if (!leadId || leadId.includes('/')) return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
           return core.requireAuth(req, res, (rq, rs, ctx) => apiLeadsDelete(rq, rs, ctx, leadId));
+        }
+        // Phase 7: webhook endpoint management DELETE
+        if (route.startsWith('/api/webhooks/endpoints/')) {
+          const epId = decodeURIComponent(route.slice('/api/webhooks/endpoints/'.length));
+          if (!epId || epId.includes('/')) return core.sendJson(res, 404, { error: 'endpoint not found', code: 'not_found' });
+          return core.requireRole(req, res, 'owner', (rq, rs, ctx) => apiWebhookEndpointsDelete(rq, rs, ctx, epId));
         }
         if (route === '/api/integrations/calendar/disconnect') {
           return core.requireRole(req, res, 'owner', apiCalendarDisconnect);
@@ -3833,6 +4356,19 @@ const server = http.createServer(async (req, res) => {
       if (route === '/api/hvac/jobs') return core.requireAuth(req, res, apiHvacJobSave, body);
       if (route === '/api/hvac/book') return core.requireAuth(req, res, apiHvacBook, body);
       if (route === '/api/leads') return core.requireAuth(req, res, apiLeadsCreate, body);
+      if (route === '/api/leads/bulk') return core.requireRole(req, res, 'owner', apiLeadsBulkUpdate, body);
+      // Phase 7: Lead activity timeline
+      // (handled in PATCH block above for /api/leads/:id/activities)
+      // Phase 7: Razorpay webhook (public, HMAC-verified)
+      if (route === '/api/webhooks/razorpay') return apiWebhookRazorpay(req, res, body);
+      // Phase 7: WhatsApp webhook receipts
+      if (route === '/api/webhooks/whatsapp') return apiWhatsappWebhookInbound(req, res, body);
+      // Phase 7: Manual WhatsApp template dispatch
+      if (route === '/api/notifications/whatsapp') return core.requireRole(req, res, 'owner', apiWhatsappNotify, body);
+      // Phase 7: Outbound call schedule
+      if (route === '/api/telephony/outbound/schedule') return core.requireRole(req, res, 'owner', apiOutboundSchedule, body);
+      // Phase 7: Webhook endpoint registration
+      if (route === '/api/webhooks/endpoints') return core.requireRole(req, res, 'owner', apiWebhookEndpointsCreate, body);
       if (route === '/api/integrations/calendar/book') return core.requireAuth(req, res, apiCalendarBook, body);
 
       return core.sendJson(res, 404, { error: 'no such endpoint', code: 'not_found' });
@@ -3972,6 +4508,8 @@ server.on('error', (e) => {
 
 // Boot then listen.
 boot().then(() => {
+  // Phase 7: initialise BullMQ outbound queue (no-op if REDIS_URL absent)
+  initOutboundQueue();
   server.listen(PORT, () => {
     const live = providers.describeProviders();
     const flag = (layer, id) => (live[layer].find((p) => p.id === id) || {}).live ? 'ok' : 'MISSING';

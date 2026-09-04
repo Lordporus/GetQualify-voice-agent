@@ -548,14 +548,21 @@ async function requireRole(req, res, minimum, handler, body) {
  * Every authed route is therefore tenant scoped via ctx.tenant.id.
  */
 async function requireAuth(req, res, handler, body) {
-  const ctx = await getSession(req);
-  if (!ctx) {
-    return send(res, 401, JSON.stringify({ error: 'authentication required', code: 'no_session' }), {
-      'Content-Type': 'application/json',
-      'Set-Cookie': clearCookie(),
-    });
+  try {
+    const ctx = await getSession(req);
+    if (!ctx) {
+      return send(res, 401, JSON.stringify({ error: 'authentication required', code: 'no_session' }), {
+        'Content-Type': 'application/json',
+        'Set-Cookie': clearCookie(),
+      });
+    }
+    return await handler(req, res, { ...ctx, body });
+  } catch (err) {
+    console.error('requireAuth handler error:', err);
+    if (!res.headersSent) {
+      sendJson(res, 500, { error: err.message || 'internal error', code: 'server_error' });
+    }
   }
-  return handler(req, res, { ...ctx, body });
 }
 
 /* ==========================================================================
