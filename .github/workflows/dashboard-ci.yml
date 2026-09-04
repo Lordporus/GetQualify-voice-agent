@@ -14,9 +14,6 @@ on:
       - "deploy/**"
   workflow_dispatch:
 
-env:
-  VPS_IP: ${{ secrets.VPS_IP }}
-
 permissions:
   contents: read
 
@@ -66,17 +63,38 @@ jobs:
 
   deploy:
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && env.VPS_IP != ''
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
+      - name: Check if VPS secrets exist
+        id: check_secrets
+        env:
+          VPS_IP: ${{ secrets.VPS_IP }}
+        run: |
+          if [ -z "$VPS_IP" ]; then
+            echo "No VPS_IP secret. Skipping deployment."
+            echo "has_vps=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_vps=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Exit if no secrets
+        if: steps.check_secrets.outputs.has_vps == 'false'
+        run: |
+          echo "VPS_IP not set, skipping deployment."
+          exit 0
+
       - uses: actions/checkout@v4
       - name: Configure SSH credentials
+        if: steps.check_secrets.outputs.has_vps == 'true'
         run: |
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY || secrets.SSH_KEY || secrets.SSH_KEY_PATH }}" > ~/.ssh/id_deploy
           chmod 600 ~/.ssh/id_deploy
           ssh-keyscan -H "${{ secrets.VPS_IP }}" >> ~/.ssh/known_hosts 2>/dev/null || true
+
       - name: Deploy Dashboard to VPS
+        if: steps.check_secrets.outputs.has_vps == 'true'
         run: bash deploy/06-deploy-dashboard.sh
         env:
           VPS_IP: ${{ secrets.VPS_IP }}
