@@ -1,5 +1,4 @@
 name: Dashboard CI
-
 on:
   push:
     paths:
@@ -14,6 +13,9 @@ on:
       - ".github/workflows/dashboard-ci.yml"
       - "deploy/**"
   workflow_dispatch:
+
+env:
+  VPS_IP: ${{ secrets.VPS_IP }}
 
 permissions:
   contents: read
@@ -64,7 +66,7 @@ jobs:
 
   deploy:
     needs: test
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && secrets.VPS_IP != ''
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && env.VPS_IP != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
