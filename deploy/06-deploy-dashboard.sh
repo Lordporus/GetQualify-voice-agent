@@ -116,8 +116,13 @@ if [ -z "${DB_DRIVER:-}" ]; then
   env_content="${env_content}DB_DRIVER=postgres"$'\n'
 fi
 
-say "Writing production environment configuration on remote VPS..."
-printf '%s' "$env_content" | rsh "cat > /opt/getqualify/.env && cp /opt/getqualify/.env /opt/getqualify/dashboard/.env"
+if rsh "[ -s /opt/getqualify/dashboard/.env ]"; then
+  say "Existing /opt/getqualify/dashboard/.env found on VPS, preserving existing configuration."
+  rsh "cp -n /opt/getqualify/dashboard/.env /opt/getqualify/.env 2>/dev/null || true"
+else
+  say "Writing production environment configuration on remote VPS..."
+  printf '%s' "$env_content" | rsh "cat > /opt/getqualify/.env && cp /opt/getqualify/.env /opt/getqualify/dashboard/.env"
+fi
 
 # 8. Remove any legacy standalone container on remote VPS
 rsh "docker rm -f getqualify 2>/dev/null || true"
