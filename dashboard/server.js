@@ -221,6 +221,15 @@ async function boot() {
         [preset.id, preset.slug, preset.name, preset.category, preset.version || 1, true, preset.greeting, preset.persona || null, JSON.stringify(preset.fields || []), JSON.stringify(preset.guardrails || [])]
       ).catch(() => {});
     }
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS email_otps (
+        email VARCHAR(255) PRIMARY KEY,
+        user_id VARCHAR(64) NOT NULL,
+        otp_hash TEXT NOT NULL,
+        exp BIGINT NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      )
+    `).catch(() => {});
   }
 
   const hasDemo = DEMO_EMAIL && existing.users.some((u) => u.email === DEMO_EMAIL);
@@ -319,7 +328,7 @@ async function boot() {
    Public-facing serialization (never leak passHash, scope to tenant).
    ========================================================================== */
 function publicUser(u) {
-  return { id: u.id, tenantId: u.tenantId, email: u.email, name: u.name, role: u.role, status: u.status, createdAt: u.createdAt };
+  return { id: u.id, tenantId: u.tenantId, email: u.email, name: u.name, role: u.role, status: u.status, createdAt: u.createdAt, verified: !!u.verified };
 }
 function publicTenant(t) {
   return {
@@ -438,6 +447,7 @@ async function apiSignup(req, res, body) {
     user = {
       id: userId, tenantId, email, name,
       passHash, role: 'owner', status: 'active', createdAt: nowIso,
+      verified: false,
     };
 
     try {
@@ -457,9 +467,9 @@ async function apiSignup(req, res, body) {
 
     try {
       await client.query(
-        `INSERT INTO users (id, tenant_id, email, name, pass_hash, role, status, created_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [userId, tenantId, email, name, passHash, 'owner', 'active', nowIso]
+        `INSERT INTO users (id, tenant_id, email, name, pass_hash, role, status, created_at, verified)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [userId, tenantId, email, name, passHash, 'owner', 'active', nowIso, false]
       );
     } catch (err) {
       if (err.code === '23505') {
@@ -474,6 +484,15 @@ async function apiSignup(req, res, body) {
       `trial:${tenantId}`, userId, { amountInr: 10 });
 
     await db.addAuditSql(client, { tenant, user }, 'auth.signup', 'tenant', tenantId);
+
+    // Generate 6-digit OTP, store in database, and trigger email via Resend
+    const otp = generateOtp();
+    const otpHash = core.hashPassword(otp);
+    const otpExp = Date.now() + 10 * 60 * 1000;
+    await storeOtp(email, userId, otpHash, otpExp);
+    sendOtpEmail(email, otp).catch((err) => {
+      console.error('[auth] Failed to send verification email:', err.message);
+    });
   });
 
   // Session creation stays on core.js path (not migrated in this group).
@@ -532,6 +551,159 @@ async function apiLogout(req, res) {
     'Content-Type': 'application/json',
     'Set-Cookie': core.clearAuthCookies(),
   });
+}
+
+// ---- Email Verification (OTP) Helpers & Endpoints ----
+
+function generateOtp() {
+  return String(crypto.randomInt(100000, 1000000));
+}
+
+async function storeOtp(email, userId, otpHash, exp) {
+  if (db.isPostgres) {
+    await db.query(
+      `INSERT INTO email_otps (email, user_id, otp_hash, exp)
+       VALUES ($1, $2, $3, $4)
+       ON CONFLICT (email) DO UPDATE SET otp_hash = EXCLUDED.otp_hash, exp = EXCLUDED.exp`,
+      [email, userId, otpHash, exp]
+    ).catch((err) => console.error('[auth] Error storing OTP in Postgres:', err.message));
+  } else {
+    await core.mutate((d) => {
+      d.email_otps = (d.email_otps || []).filter((o) => o.email !== email);
+      d.email_otps.push({ email, userId, otpHash, exp });
+    });
+  }
+}
+
+async function getOtp(email) {
+  if (db.isPostgres) {
+    const res = await db.query('SELECT * FROM email_otps WHERE email = $1', [email]);
+    if (!res.rows[0]) return null;
+    return { email: res.rows[0].email, userId: res.rows[0].user_id, otpHash: res.rows[0].otp_hash, exp: Number(res.rows[0].exp) };
+  } else {
+    const d = core.db();
+    return (d.email_otps || []).find((o) => o.email === email) || null;
+  }
+}
+
+async function deleteOtp(email) {
+  if (db.isPostgres) {
+    await db.query('DELETE FROM email_otps WHERE email = $1', [email]).catch(() => {});
+  } else {
+    await core.mutate((d) => {
+      d.email_otps = (d.email_otps || []).filter((o) => o.email !== email);
+    });
+  }
+}
+
+async function sendOtpEmail(email, otp) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const fromEmail = process.env.RESEND_FROM_EMAIL || 'noreply@hello.getqualify.in';
+  if (!apiKey) {
+    console.warn(`[email] RESEND_API_KEY missing. Verification OTP for ${email}: ${otp}`);
+    return;
+  }
+  try {
+    const res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        from: fromEmail,
+        to: [email],
+        subject: 'Verify your GetQualify account - OTP Code',
+        html: `
+          <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background: #ffffff;">
+            <h2 style="color: #6E7BFF; margin-top: 0; font-size: 20px;">GetQualify Verification</h2>
+            <p style="color: #334155; font-size: 14px; line-height: 1.5;">Use the following 6-digit code to verify your email address:</p>
+            <div style="font-size: 32px; font-weight: 700; letter-spacing: 6px; padding: 18px; background: #f8fafc; text-align: center; border-radius: 8px; color: #0f172a; margin: 20px 0; border: 1px dashed #cbd5e1;">
+              ${otp}
+            </div>
+            <p style="color: #64748b; font-size: 12px; margin-bottom: 0;">This code is valid for 10 minutes. If you did not request this, please ignore this email.</p>
+          </div>
+        `,
+      }),
+    });
+    if (!res.ok) {
+      const errText = await res.text();
+      console.error('[email] Resend API error:', res.status, errText);
+    }
+  } catch (err) {
+    console.error('[email] Failed to send OTP email via Resend:', err.message);
+  }
+}
+
+async function apiVerifyOtp(req, res, body) {
+  const email = String(body.email || '').trim().toLowerCase();
+  const otp = String(body.otp || '').trim();
+
+  if (!email || !EMAIL_RE.test(email)) {
+    return core.sendJson(res, 422, { error: 'valid email required', code: 'bad_email' });
+  }
+  if (!/^\d{6}$/.test(otp)) {
+    return core.sendJson(res, 422, { error: '6-digit OTP code required', code: 'bad_otp' });
+  }
+
+  const record = await getOtp(email);
+  if (!record) {
+    return core.sendJson(res, 400, { error: 'no verification code found. Please request a new code.', code: 'otp_not_found' });
+  }
+
+  if (Date.now() > record.exp) {
+    await deleteOtp(email);
+    return core.sendJson(res, 410, { error: 'verification code has expired. Please request a new one.', code: 'otp_expired' });
+  }
+
+  const isValid = core.verifyPassword(otp, record.otpHash);
+  if (!isValid) {
+    return core.sendJson(res, 401, { error: 'invalid verification code', code: 'bad_otp' });
+  }
+
+  if (db.isPostgres) {
+    await db.query('UPDATE users SET verified = true WHERE id = $1', [record.userId]);
+  } else {
+    await core.mutate((d) => {
+      const u = (d.users || []).find((user) => user.id === record.userId);
+      if (u) u.verified = true;
+    });
+  }
+
+  await deleteOtp(email);
+  return core.sendJson(res, 200, { ok: true, message: 'email verified successfully' });
+}
+
+async function apiResendOtp(req, res, body) {
+  const email = String(body.email || '').trim().toLowerCase();
+  if (!email || !EMAIL_RE.test(email)) {
+    return core.sendJson(res, 422, { error: 'valid email required', code: 'bad_email' });
+  }
+
+  let user;
+  if (db.isPostgres) {
+    const userRes = await db.query('SELECT id, verified FROM users WHERE email = $1', [email]);
+    user = userRes.rows[0];
+  } else {
+    user = (core.db().users || []).find((u) => u.email === email);
+  }
+
+  if (!user) {
+    return core.sendJson(res, 200, { ok: true, message: 'if this account exists, a new verification code has been sent.' });
+  }
+
+  if (user.verified) {
+    return core.sendJson(res, 400, { error: 'this email is already verified', code: 'already_verified' });
+  }
+
+  const otp = generateOtp();
+  const otpHash = core.hashPassword(otp);
+  const otpExp = Date.now() + 10 * 60 * 1000;
+
+  await storeOtp(email, user.id, otpHash, otpExp);
+  await sendOtpEmail(email, otp);
+
+  return core.sendJson(res, 200, { ok: true, message: 'verification code resent successfully' });
 }
 
 /* ==========================================================================
@@ -4149,7 +4321,7 @@ const server = http.createServer(async (req, res) => {
 
       // CSRF validation for mutating endpoints (Double-Submit Cookie)
       const isMutating = !['GET', 'HEAD', 'OPTIONS'].includes(req.method || '');
-      const isPublicAuth = route === '/api/auth/login' || route === '/api/auth/signup';
+      const isPublicAuth = route === '/api/auth/login' || route === '/api/auth/signup' || route === '/api/verify-otp' || route === '/api/auth/verify-otp' || route === '/api/resend-otp' || route === '/api/auth/resend-otp';
       const isPublicDemo = route.startsWith('/api/public/demo/');
       const isCsrfExempt = webhookInbound || isPublicAuth || isPublicDemo;
 
@@ -4305,6 +4477,8 @@ const server = http.createServer(async (req, res) => {
       // Public POST (auth) routes.
       if (route === '/api/auth/signup') return apiSignup(req, res, body);
       if (route === '/api/auth/login') return apiLogin(req, res, body);
+      if (route === '/api/verify-otp' || route === '/api/auth/verify-otp') return apiVerifyOtp(req, res, body);
+      if (route === '/api/resend-otp' || route === '/api/auth/resend-otp') return apiResendOtp(req, res, body);
       if (route === '/api/auth/logout') return apiLogout(req, res);
       if (route === '/api/auth/impersonation/exit') return core.requireAuth(req, res, apiImpersonationExit, body);
       if (route === '/api/webhooks/dograh/call-completed') return apiWebhookDograhCallCompleted(req, res, body);
