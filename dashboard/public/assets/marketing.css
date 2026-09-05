@@ -4,7 +4,19 @@
    No em dashes anywhere. Use commas or periods.
    ========================================================================== */
 
-body { position: relative; }
+html, body {
+  width: 100%;
+  max-width: 100vw;
+  overflow-x: hidden;
+  position: relative;
+}
+
+/* Clamp visual orb container so it never triggers horizontal scroll */
+.hero-visual,
+.orb-stage {
+  max-width: 100%;
+  overflow: hidden;
+}
 
 /* Keep page content above the fixed atmosphere layer */
 .nav, main, .footer { position: relative; z-index: 2; }

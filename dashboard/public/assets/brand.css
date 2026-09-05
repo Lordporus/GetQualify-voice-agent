@@ -19,9 +19,9 @@
 
   /* ---- Text ---- */
   --ink:       #1C1913;
-  --ink-soft:  #4E493F;
-  --ink-dim:   #777064;
-  --ink-faint: #A39B8D;
+  --ink-soft:  #433E35;
+  --ink-dim:   #615B51;
+  --ink-faint: #827A6E;
 
   /* ---- Accent: electric "voltage" system (cyan -> indigo -> violet) ---- */
   --a-cyan:    #D9B866;

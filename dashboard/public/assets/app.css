@@ -121,11 +121,46 @@
 .tenant-chip .tn { font-size: 0.88rem; font-weight: 580; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .tenant-chip .tp { font-size: 0.74rem; color: var(--ink-dim); text-transform: capitalize; }
 .side-logout {
-  width: 100%; margin-top: 10px; display: flex; align-items: center; justify-content: center; gap: 8px;
-  padding: 9px; border-radius: var(--r); background: transparent; border: 1px solid var(--line-2);
-  color: var(--ink-dim); font-size: 0.85rem; cursor: pointer; transition: 0.2s;
+  width: 100%;
+  margin-top: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-sizing: border-box;
+  min-height: 44px;
+  padding: 10px 14px;
+  border-radius: var(--r);
+  background: transparent;
+  border: 1px solid var(--line-2);
+  color: var(--ink-dim);
+  font-size: 0.85rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: 0.2s ease;
+  overflow: hidden;
+  white-space: nowrap;
 }
-.side-logout:hover { color: var(--ink); border-color: rgba(184,138,45,.35); background: rgba(184,138,45,0.06); }
+
+.side-logout:hover {
+  color: var(--ink);
+  border-color: rgba(184, 138, 45, 0.35);
+  background: rgba(184, 138, 45, 0.06);
+}
+
+.side-logout svg,
+.side-logout .ic {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: block;
+}
+
+.side-logout span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 
 /* ---- Topbar ---- */
 .top {
@@ -137,7 +172,14 @@
 .top .menu-btn { display: none; }
 .top-route { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .top-route .crumb { font-size: 0.72rem; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-faint); }
-.top-route .ttl { font-size: 1.05rem; font-weight: 600; letter-spacing: -0.02em; }
+.top-route .ttl {
+  font-size: clamp(0.95rem, 2.2vw, 1.15rem);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .health-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .hchip {
   display: inline-flex; align-items: center; gap: 7px; padding: 6px 11px; border-radius: var(--r-pill);
@@ -864,22 +906,38 @@
     position: fixed;
     inset: 0;
     z-index: 39;
-    background: rgba(0, 0, 0, 0.5);
-    display: none;
-  }
-  .shell.nav-open .nav-scrim {
+    background: rgba(12, 10, 8, 0.55);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s var(--ease);
     display: block;
   }
+  .shell.nav-open .nav-scrim {
+    opacity: 1;
+    pointer-events: auto;
+  }
   .top .menu-btn {
-    display: grid;
-    place-items: center;
-    width: 44px;
-    height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 44px;
+    min-height: 44px;
+    padding: 10px;
     border-radius: 10px;
     background: var(--raised);
     border: 1px solid var(--line-2);
     color: var(--ink-soft);
     cursor: pointer;
+    touch-action: manipulation;
+  }
+  .top .menu-btn:active {
+    transform: scale(0.96);
+    background: var(--bg-2);
+  }
+  body:has(.shell.nav-open) {
+    overflow: hidden;
   }
 
   /* Grid Adjustments */
@@ -936,6 +994,51 @@
    RESPONSIVE: MOBILE TIER (max-width: 767px)
    ========================================================= */
 @media (max-width: 767px) {
+  /* 1. Prevent iOS auto-zoom on input focus */
+  input[type="text"],
+  input[type="email"],
+  input[type="tel"],
+  input[type="password"],
+  input[type="number"],
+  input[type="search"],
+  select,
+  textarea {
+    font-size: 16px !important;
+  }
+
+  /* 2. Action buttons & Filter touch targets (44px min) */
+  .btn,
+  .invoice-filter,
+  .tab-btn,
+  .quick-action-btn,
+  .agency-action {
+    min-height: 44px;
+    box-sizing: border-box;
+  }
+
+  .invoice-filter {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 14px;
+  }
+
+  /* 3. Modal close button minimum 44px touch target */
+  .modal-close {
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 10px;
+  }
+
+  /* 4. Fluid headings */
+  .view-head h2 {
+    font-size: clamp(1.25rem, 3.5vw, 1.65rem);
+    letter-spacing: -0.025em;
+  }
+
   .main {
     padding: 18px 14px 60px;
   }
@@ -949,10 +1052,10 @@
   }
   .view-actions .btn {
     flex: 1;
-    min-height: 42px;
+    min-height: 44px;
   }
   .top-route .ttl {
-    font-size: 0.96rem;
+    font-size: clamp(0.92rem, 2.8vw, 1.05rem);
   }
   .health-row .hchip .lbl-txt {
     display: none;

@@ -583,7 +583,15 @@ function renderShell() {
   const shell = el('div', { class: 'shell' + (impersonationBanner ? ' is-impersonating' : '') }, [
     side, top, impersonationBanner,
     el('main', { class: 'main', id: 'view' }),
-    el('div', { class: 'nav-scrim', onclick: () => $('.shell').classList.remove('nav-open') })
+    el('div', {
+      class: 'nav-scrim',
+      role: 'presentation',
+      'aria-hidden': 'true',
+      onclick: () => {
+        const s = $('.shell');
+        if (s) s.classList.remove('nav-open');
+      }
+    })
   ]);
 
   root.innerHTML = '';
