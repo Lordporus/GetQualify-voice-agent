@@ -153,6 +153,152 @@ function modal(opts) {
   return close;
 }
 
+function openOtpModal(email, onVerified, onCancel) {
+  const host = $('#modal-host');
+  let timerInterval = null;
+  let cooldownSec = 60;
+
+  const close = () => {
+    if (timerInterval) clearInterval(timerInterval);
+    host.classList.add('hide');
+    host.setAttribute('aria-hidden', 'true');
+    host.innerHTML = '';
+  };
+
+  const errBox = el('div', { class: 'auth-err', style: 'margin-bottom: 12px;' });
+  const showErr = (m) => {
+    errBox.textContent = m;
+    errBox.classList.add('show');
+  };
+  const clearErr = () => {
+    errBox.textContent = '';
+    errBox.classList.remove('show');
+  };
+
+  const otpInput = el('input', {
+    class: 'input otp-input',
+    type: 'text',
+    inputmode: 'numeric',
+    autocomplete: 'one-time-code',
+    placeholder: '••••••',
+    maxlength: '6',
+  });
+
+  otpInput.addEventListener('input', () => {
+    clearErr();
+    otpInput.value = otpInput.value.replace(/\D/g, '').slice(0, 6);
+  });
+
+  otpInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      verifyBtn.click();
+    }
+  });
+
+  const resendBtn = el('button', {
+    class: 'btn btn-ghost btn-sm',
+    type: 'button',
+    style: 'padding: 4px 10px; font-size: 0.82rem;'
+  }, 'Resend code');
+
+  const startCooldown = (sec) => {
+    cooldownSec = sec || 60;
+    resendBtn.disabled = true;
+    resendBtn.textContent = 'Resend in ' + cooldownSec + 's';
+    if (timerInterval) clearInterval(timerInterval);
+    timerInterval = setInterval(() => {
+      cooldownSec--;
+      if (cooldownSec <= 0) {
+        clearInterval(timerInterval);
+        timerInterval = null;
+        resendBtn.disabled = false;
+        resendBtn.textContent = 'Resend code';
+      } else {
+        resendBtn.textContent = 'Resend in ' + cooldownSec + 's';
+      }
+    }, 1000);
+  };
+
+  resendBtn.addEventListener('click', async () => {
+    if (resendBtn.disabled) return;
+    clearErr();
+    resendBtn.disabled = true;
+    resendBtn.textContent = 'Sending...';
+    try {
+      await api('/api/resend-otp', { method: 'POST', body: { email: email }, allow401: true });
+      toast('A new verification code has been sent to ' + email + '.', 'ok');
+      startCooldown(60);
+      otpInput.focus();
+    } catch (err) {
+      resendBtn.disabled = false;
+      resendBtn.textContent = 'Resend code';
+      showErr(err.message || 'Failed to resend verification code.');
+    }
+  });
+
+  startCooldown(60);
+
+  const verifyBtn = el('button', { class: 'btn btn-primary' }, 'Verify & Enter');
+  verifyBtn.addEventListener('click', async () => {
+    clearErr();
+    const otp = otpInput.value.trim();
+    if (!otp || otp.length !== 6) {
+      showErr('Please enter the complete 6-digit verification code.');
+      otpInput.focus();
+      return;
+    }
+    verifyBtn.disabled = true;
+    verifyBtn.textContent = 'Verifying...';
+    try {
+      await api('/api/verify-otp', { method: 'POST', body: { email: email, otp: otp }, allow401: true });
+      close();
+      if (typeof onVerified === 'function') onVerified();
+    } catch (err) {
+      verifyBtn.disabled = false;
+      verifyBtn.textContent = 'Verify & Enter';
+      showErr(err.message || 'Invalid verification code.');
+      otpInput.focus();
+    }
+  });
+
+  const cancelBtn = el('button', { class: 'btn btn-ghost' }, 'Cancel');
+  cancelBtn.addEventListener('click', () => {
+    close();
+    if (typeof onCancel === 'function') onCancel();
+  });
+
+  const card = el('div', { class: 'modal modal-otp', role: 'dialog', 'aria-modal': 'true' }, [
+    el('div', { style: 'display:flex; align-items:center; gap:8px; margin-bottom:8px;' }, [
+      el('span', { class: 'section-kicker', style: 'margin-bottom:0;' }, 'Security verification')
+    ]),
+    el('h3', {}, 'Verify your email'),
+    el('p', {}, [
+      document.createTextNode('We sent a 6-digit verification code to '),
+      el('strong', { style: 'color: var(--ink); word-break: break-all;' }, email),
+      document.createTextNode('. Enter it below to activate your workspace.')
+    ]),
+    otpInput,
+    errBox,
+    el('div', { class: 'otp-resend-wrap' }, [
+      el('span', { class: 'muted', style: 'font-size:0.86rem;' }, "Didn't receive code?"),
+      resendBtn
+    ]),
+    el('div', { class: 'modal-actions', style: 'margin-top:20px;' }, [
+      cancelBtn,
+      verifyBtn
+    ])
+  ]);
+
+  host.innerHTML = '';
+  host.appendChild(el('div', { onclick: (e) => { if (e.target === e.currentTarget) cancelBtn.click(); }, style: 'position:absolute;inset:0' }));
+  host.appendChild(card);
+  host.classList.remove('hide');
+  host.setAttribute('aria-hidden', 'false');
+  setTimeout(() => otpInput.focus(), 60);
+  return close;
+}
+
 /* ===========================================================================
    SMALL UTILITIES
    =========================================================================== */
@@ -307,6 +453,20 @@ function renderAuth() {
         route = '/api/auth/login';
       }
       const res = await api(route, { method: 'POST', body: body, allow401: true });
+      if (mode === 'signup' || (res.user && res.user.verified === false)) {
+        btn.disabled = false;
+        btn.textContent = mode === 'login' ? 'Enter Agency OS' : 'Create workspace';
+        openOtpModal(email, () => {
+          State.me = { user: { ...res.user, verified: true }, tenant: res.tenant };
+          resetData();
+          toast(mode === 'login' ? 'Email verified & signed in.' : 'Account created & verified.', 'ok');
+          renderShell();
+        }, () => {
+          btn.disabled = false;
+          btn.textContent = mode === 'login' ? 'Enter Agency OS' : 'Create workspace';
+        });
+        return;
+      }
       State.me = { user: res.user, tenant: res.tenant };
       resetData();
       toast(mode === 'login' ? 'Signed in.' : 'Account created.', 'ok');
