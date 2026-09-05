@@ -582,7 +582,13 @@ async function getOtp(email) {
   if (db.isPostgres) {
     const res = await db.query('SELECT * FROM email_otps WHERE email = $1', [email]);
     if (!res.rows[0]) return null;
-    return { email: res.rows[0].email, userId: res.rows[0].user_id, otpHash: res.rows[0].otp_hash, exp: Number(res.rows[0].exp) };
+    const r = res.rows[0];
+    return {
+      email: r.email,
+      userId: r.userId || r.user_id,
+      otpHash: r.otpHash || r.otp_hash,
+      exp: Number(r.exp)
+    };
   } else {
     const d = core.db();
     return (d.email_otps || []).find((o) => o.email === email) || null;
@@ -4480,8 +4486,8 @@ const server = http.createServer(async (req, res) => {
       // Public POST (auth) routes.
       if (route === '/api/auth/signup') return await apiSignup(req, res, body);
       if (route === '/api/auth/login') return apiLogin(req, res, body);
-      if (route === '/api/verify-otp' || route === '/api/auth/verify-otp') return apiVerifyOtp(req, res, body);
-      if (route === '/api/resend-otp' || route === '/api/auth/resend-otp') return apiResendOtp(req, res, body);
+      if (route === '/api/verify-otp' || route === '/api/auth/verify-otp') return await apiVerifyOtp(req, res, body);
+      if (route === '/api/resend-otp' || route === '/api/auth/resend-otp') return await apiResendOtp(req, res, body);
       if (route === '/api/auth/logout') return apiLogout(req, res);
       if (route === '/api/auth/impersonation/exit') return core.requireAuth(req, res, apiImpersonationExit, body);
       if (route === '/api/webhooks/dograh/call-completed') return apiWebhookDograhCallCompleted(req, res, body);
