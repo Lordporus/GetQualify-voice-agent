@@ -487,15 +487,15 @@ async function apiSignup(req, res, body) {
       `trial:${tenantId}`, userId, { amountInr: 10 });
 
     await db.addAuditSql(client, { tenant, user }, 'auth.signup', 'tenant', tenantId);
+  });
 
-    // Generate 6-digit OTP, store in database, and trigger email via Resend
-    const otp = generateOtp();
-    const otpHash = core.hashPassword(otp);
-    const otpExp = Date.now() + 10 * 60 * 1000;
-    await storeOtp(email, userId, otpHash, otpExp);
-    sendOtpEmail(email, otp).catch((err) => {
-      console.error('[auth] Failed to send verification email:', err.message);
-    });
+  // Generate 6-digit OTP, store in database, and trigger email via Resend
+  const otp = generateOtp();
+  const otpHash = core.hashPassword(otp);
+  const otpExp = Date.now() + 10 * 60 * 1000;
+  await storeOtp(email, userId, otpHash, otpExp);
+  sendOtpEmail(email, otp).catch((err) => {
+    console.error('[auth] Failed to send verification email:', err.message);
   });
 
   // Session creation stays on core.js path (not migrated in this group).
