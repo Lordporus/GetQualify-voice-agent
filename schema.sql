@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS users (
   pass_hash TEXT NOT NULL,
   role TEXT DEFAULT 'member',
   status TEXT DEFAULT 'active',
+  verified BOOLEAN DEFAULT false,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -435,3 +436,11 @@ CREATE TABLE IF NOT EXISTS outbound_jobs (
   created_at   TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_outbound_jobs_tenant ON outbound_jobs(tenant_id);
+
+CREATE TABLE IF NOT EXISTS email_otps (
+  email VARCHAR(255) PRIMARY KEY,
+  user_id VARCHAR(64) NOT NULL,
+  otp_hash TEXT NOT NULL,
+  exp BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);

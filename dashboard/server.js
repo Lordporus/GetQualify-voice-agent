@@ -222,6 +222,9 @@ async function boot() {
       ).catch(() => {});
     }
     await db.query(`
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS verified BOOLEAN DEFAULT false;
+    `).catch(() => {});
+    await db.query(`
       CREATE TABLE IF NOT EXISTS email_otps (
         email VARCHAR(255) PRIMARY KEY,
         user_id VARCHAR(64) NOT NULL,
@@ -4475,7 +4478,7 @@ const server = http.createServer(async (req, res) => {
       }
 
       // Public POST (auth) routes.
-      if (route === '/api/auth/signup') return apiSignup(req, res, body);
+      if (route === '/api/auth/signup') return await apiSignup(req, res, body);
       if (route === '/api/auth/login') return apiLogin(req, res, body);
       if (route === '/api/verify-otp' || route === '/api/auth/verify-otp') return apiVerifyOtp(req, res, body);
       if (route === '/api/resend-otp' || route === '/api/auth/resend-otp') return apiResendOtp(req, res, body);
