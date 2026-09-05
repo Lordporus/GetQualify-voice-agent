@@ -6,15 +6,20 @@ const crypto = require('crypto');
 // DB_DRIVER=json (or unset) -> isPostgres=false, pool is never created,
 //   requiring this file never crashes. Calling query()/transaction() in json
 //   mode throws explicitly so the caller knows it hit the wrong path.
-const isPostgres = process.env.DB_DRIVER === 'postgres';
+function checkIsPostgres() {
+  return process.env.DB_DRIVER === 'postgres';
+}
 
-const Pool = isPostgres ? require('pg').Pool : null;
-
+let Pool = null;
 let pool = null;
 
 function init() {
   if (pool) return;
-  if (!isPostgres) return; // json mode: do nothing
+  if (!checkIsPostgres()) return; // json mode: do nothing
+
+  if (!Pool) {
+    Pool = require('pg').Pool;
+  }
 
   const connectionString = process.env.DATABASE_URL;
   if (!connectionString) {
@@ -64,7 +69,7 @@ function camelize(obj) {
  * @param {any[]}  params - Bound parameter values (default: [])
  */
 async function query(text, params = []) {
-  if (!isPostgres) throw new Error('db.query() called but DB_DRIVER is not "postgres"');
+  if (!checkIsPostgres()) throw new Error('db.query() called but DB_DRIVER is not "postgres"');
   if (!pool) init();
 
   const start = Date.now();
@@ -92,7 +97,7 @@ async function query(text, params = []) {
  * @param {(client: import('pg').PoolClient) => Promise<any>} callback
  */
 async function transaction(callback) {
-  if (!isPostgres) throw new Error('db.transaction() called but DB_DRIVER is not "postgres"');
+  if (!checkIsPostgres()) throw new Error('db.transaction() called but DB_DRIVER is not "postgres"');
   if (!pool) init();
 
   const client = await pool.connect();
@@ -139,64 +144,67 @@ async function addLedgerEntrySql(client, tenantId, amountPaise, type, reference,
       'SELECT 1 FROM ledger WHERE tenant_id = $1 AND idempotency_key = $2',
       [tenantId, key]
     );
-    if (dupe.rowCount > 0) return null;
+    if (dupe.rowCount > 0) {
+      console.log('[ledger] Duplicate key skipped:', key);
+      return null;
+    }
   }
 
-  // 2. Lock wallet row for this tenant (prevents concurrent balance mutation).
-  const walletRes = await client.query(
-    'SELECT id, balance_paise FROM wallets WHERE tenant_id = $1 FOR UPDATE',
+  // 2. Lock or create wallet.
+  let wallet = (await client.query(
+    'SELECT * FROM wallets WHERE tenant_id = $1 FOR UPDATE',
     [tenantId]
-  );
-  const now = new Date().toISOString();
-  let currentBalance;
+  )).rows[0];
 
-  if (walletRes.rowCount === 0) {
-    // No wallet yet — create it inside this transaction.
-    const walletId = _genId('wal_');
-    currentBalance = 0;
+  if (!wallet) {
+    const wid = _genId('w_');
+    const now = new Date().toISOString();
     await client.query(
       'INSERT INTO wallets (id, tenant_id, currency, balance_paise, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6)',
-      [walletId, tenantId, 'INR', 0, now, now]
+      [wid, tenantId, 'INR', 0, now, now]
     );
-  } else {
-    currentBalance = Number(walletRes.rows[0].balance_paise);
+    wallet = (await client.query(
+      'SELECT * FROM wallets WHERE tenant_id = $1 FOR UPDATE',
+      [tenantId]
+    )).rows[0];
   }
 
-  // 3. Validate.
-  if (!Number.isInteger(amountPaise) || currentBalance + amountPaise < 0) {
-    throw new Error('invalid wallet adjustment');
-  }
-  const newBalance = currentBalance + amountPaise;
+  const currentPaise = Number(wallet.balance_paise);
+  const newPaise     = currentPaise + amountPaise;
 
-  // 4. Update wallet balance.
+  // 3. Prevent negative balance.
+  if (newPaise < 0) {
+    throw Object.assign(
+      new Error(`insufficient balance: have ${currentPaise}p, need ${Math.abs(amountPaise)}p`),
+      { statusCode: 402, code: 'low_balance' }
+    );
+  }
+
+  // 4. Update wallet.
   await client.query(
-    'UPDATE wallets SET balance_paise = $1, updated_at = $2 WHERE tenant_id = $3',
-    [newBalance, now, tenantId]
+    'UPDATE wallets SET balance_paise = $1, updated_at = $2 WHERE id = $3',
+    [newPaise, new Date().toISOString(), wallet.id]
   );
 
   // 5. Insert ledger row.
-  const entryId = _genId('led_');
-  const idempotencyKey = key || _genId('idem_');
-  await client.query(
+  const ledgerId = _genId('led_');
+  const now      = new Date().toISOString();
+  const res = await client.query(
     `INSERT INTO ledger
-       (id, tenant_id, type, amount_paise, balance_after_paise, idempotency_key, actor_user_id, metadata, created_at)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-    [entryId, tenantId, type, amountPaise, newBalance, idempotencyKey, actorUserId, JSON.stringify(metadata), now]
+       (id, tenant_id, amount_paise, type, idempotency_key, balance_after_paise, actor_user_id, metadata, created_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     RETURNING *`,
+    [ledgerId, tenantId, amountPaise, type, key || null, newPaise, actorUserId, JSON.stringify(metadata), now]
   );
-
-  return { id: entryId, tenantId, type, amountPaise, balanceAfterPaise: newBalance, idempotencyKey, actorUserId, metadata, createdAt: now };
+  return camelize(res.rows[0]);
 }
 
 /**
- * Appends an audit event inside an existing pg transaction client.
- *
- * ctx must have { tenant, user } and optionally { impersonator }.
- * This matches both a real session ctx and the synthetic { tenant, user }
- * object used during signup (before a session exists).
+ * Inserts an audit event inside an existing pg transaction client.
  *
  * @param {import('pg').PoolClient} client
- * @param {{ tenant: {id:string}, user: {id:string}, impersonator?: {id:string} }} ctx
- * @param {string} action      - e.g. 'auth.signup'
+ * @param {object} ctx        - { tenant: { id }, user: { id }, impersonator?: { id } }
+ * @param {string} action     - e.g. 'auth.signup', 'agent.create'
  * @param {string} targetType  - e.g. 'tenant'
  * @param {string} targetId
  * @param {object} metadata
@@ -216,7 +224,7 @@ async function addAuditSql(client, ctx, action, targetType, targetId, metadata =
 }
 
 async function health(deep = false) {
-  if (!isPostgres) {
+  if (!checkIsPostgres()) {
     return { driver: 'json', ok: true };
   }
   if (!pool) {
@@ -240,4 +248,14 @@ async function health(deep = false) {
   }
 }
 
-module.exports = { isPostgres, camelize, query, transaction, addLedgerEntrySql, addAuditSql, health };
+module.exports = {
+  get isPostgres() {
+    return checkIsPostgres();
+  },
+  camelize,
+  query,
+  transaction,
+  addLedgerEntrySql,
+  addAuditSql,
+  health
+};
