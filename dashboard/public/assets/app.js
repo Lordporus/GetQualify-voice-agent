@@ -1010,6 +1010,50 @@ function buildAgentForm(existing) {
 
   card.appendChild(el('h3', {}, existing ? 'Edit agent' : 'New agent'));
   card.appendChild(el('p', { class: 'hint' }, existing ? 'Update the persona, voice, or assigned number.' : 'Describe the persona and pick a voice. You can preview it instantly before assigning a number.'));
+
+  if (!existing) {
+    const templateBar = el('div', { class: 'template-selector-box', style: 'margin:14px 0 18px;padding:12px 14px;background:rgba(234,179,8,0.06);border:1px solid rgba(234,179,8,0.25);border-radius:8px' }, [
+      el('div', { style: 'display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px' }, [
+        el('div', { style: 'display:flex;align-items:center;gap:6px' }, [
+          el('span', { style: 'font-weight:600;font-size:13px' }, '⚡ Quick Template:'),
+          el('span', { class: 'badge-ready', style: 'background:rgba(234,179,8,0.15);color:#ca8a04;font-weight:600;border:1px solid rgba(234,179,8,0.3)' }, '⭐ Recommended for India')
+        ]),
+        el('span', { class: 'muted', style: 'font-size:11px' }, 'Deepgram Aura-2 Helena (Phase 1)')
+      ]),
+      el('div', { style: 'display:flex;gap:8px;flex-wrap:wrap;align-items:center' }, [
+        el('button', {
+          type: 'button',
+          class: 'btn btn-sm btn-primary',
+          style: 'background:#ca8a04;border-color:#ca8a04;color:#fff',
+          onclick: () => choosePayalTemplateModal(nameI, personaI, greetI, descI)
+        }, '🇮🇳 Payal Receptionist (Indian Market)'),
+        el('button', {
+          type: 'button',
+          class: 'btn btn-sm btn-ghost',
+          onclick: () => {
+            nameI.value = 'Ria Receptionist';
+            personaI.value = 'You are Ria, the AI voice agent for GetQualify. You are on a live phone call in English.\n\n- ONE or TWO short sentences per turn.\n- Plain spoken English.\n- Warm, quick, confident.';
+            greetI.value = 'Hi, thanks for calling GetQualify. How can I help today?';
+            descI.value = 'Sharp, confident, friendly receptionist';
+            toast('Applied Ria (Global English) template.', 'ok');
+          }
+        }, '🌐 Ria (Global English)'),
+        el('button', {
+          type: 'button',
+          class: 'btn btn-sm btn-ghost',
+          onclick: () => {
+            nameI.value = '';
+            personaI.value = '';
+            greetI.value = '';
+            descI.value = '';
+            toast('Reset to blank agent.', 'ok');
+          }
+        }, '✏️ Blank Agent')
+      ])
+    ]);
+    card.appendChild(templateBar);
+  }
+
   card.appendChild(form);
   syncVoice();
 
@@ -1055,6 +1099,91 @@ function buildAgentForm(existing) {
   }
 
   return card;
+}
+
+function choosePayalTemplateModal(nameI, personaI, greetI, descI) {
+  const payalPresets = (State.presets || []).filter((p) => p.slug?.includes('payal'));
+  const options = [
+    {
+      id: 'salon',
+      name: 'Payal (Salon / Spa)',
+      icon: '💇',
+      category: 'Salon & Spa',
+      greeting: 'Hi! Payal bol rahi hoon [your salon name] se. Aaj kya treatment lena hai?',
+      persona: `You are Payal, the AI receptionist for [salon name]. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences per turn.\n- Warm, conversational Hindi/English/Hinglish mix.\n- Like a friendly neighborhood receptionist.\n\nTHE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call.\n\nSTAGE 1: Greet in Hindi/English, ask what treatment they want.\nSTAGE 2: Help with booking, capture name, phone, preferred time.\nSTAGE 3: Close warmly in 6-10 words. Example: "Dhanyawaad! Dekhte hain Tuesday ko. Bye!"`
+    },
+    {
+      id: 'clinic',
+      name: 'Payal (Medical Clinic)',
+      icon: '🩺',
+      category: 'Clinic & Healthcare',
+      greeting: 'Namaste! Payal speaking from [doctor name] clinic. Kya appointment chahiye?',
+      persona: `You are Payal, clinic receptionist for Dr. [Name]. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences, warm and professional.\n- Hindi/English/Hinglish as caller prefers.\n- Respectful, empathetic tone.\n\nTHE ONE RULE: NEVER say "sorry, I didn't catch that" more than once.\n\nSTAGE 1: Greet, ask if appointment or consultation needed.\nSTAGE 2: Capture symptoms lightly, find available slot, get patient details.\nSTAGE 3: Confirm appointment time twice. Example: "Doctor ko Friday 10am pe milenge. Theek hai?"`
+    },
+    {
+      id: 'hvac',
+      name: 'Payal (HVAC & AC Services)',
+      icon: '❄️',
+      category: 'HVAC & Home Services',
+      greeting: 'Hello! Payal here from [company] AC services. Kya problem aa rahi hai AC mein?',
+      persona: `You are Payal, service receptionist for HVAC company. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences, quick and helpful.\n- Hindi/English/Hinglish, customer-friendly.\n- Show you understand AC issues.\n\nSTAGE 1: Greet, ask what AC issue they have.\nSTAGE 2: Understand urgency (emergency vs scheduled), get address, capture issue type.\nSTAGE 3: Confirm service timing. "Technician ko 2 ghante mein bhejenge. Address confirm kijiye?"`
+    },
+    {
+      id: 'realtor',
+      name: 'Payal (Real Estate)',
+      icon: '🏢',
+      category: 'Real Estate & Properties',
+      greeting: 'Hello! Payal bol rahi hoon [agency name] se. Property buy, sell ya rent karni hai?',
+      persona: `You are Payal, property inquiry receptionist. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences, warm and courteous.\n- Hindi/English/Hinglish mirroring.\n\nSTAGE 1: Greet and ask property objective.\nSTAGE 2: Capture budget, preferred location, timeline.\nSTAGE 3: Offer site visit scheduling.`
+    },
+    {
+      id: 'restaurant',
+      name: 'Payal (Restaurant Reservations)',
+      icon: '🍽️',
+      category: 'Restaurant & Dining',
+      greeting: 'Namaste! Payal speaking from [restaurant name]. Table reservation karni hai ya timings janne hain?',
+      persona: `You are Payal, table booking receptionist. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences, polite and upbeat.\n- Hindi/English/Hinglish mirroring.\n\nSTAGE 1: Greet and ask booking date/time.\nSTAGE 2: Capture guest count, special requests.\nSTAGE 3: Confirm reservation details clearly.`
+    }
+  ];
+
+  const list = el('div', { class: 'grid gap-2', style: 'margin-top:12px' }, options.map((opt) => {
+    const matched = payalPresets.find((p) => p.category?.includes(opt.id) || p.slug?.includes(opt.id));
+    const finalName = matched ? matched.name : opt.name;
+    const finalGreet = matched ? matched.greeting : opt.greeting;
+    const finalPersona = (matched && matched.persona) ? matched.persona : opt.persona;
+
+    return el('div', {
+      class: 'card card-pad flex items-center justify-between gap-3',
+      style: 'cursor:pointer;border:1px solid var(--border-subtle,rgba(255,255,255,0.08));padding:12px;border-radius:8px',
+      onclick: () => {
+        nameI.value = finalName;
+        personaI.value = finalPersona;
+        greetI.value = finalGreet;
+        descI.value = 'Warm Indian receptionist (Deepgram Aura-2 Helena)';
+        toast('Applied ' + finalName + ' template.', 'ok');
+        const host = $('#modal-host');
+        if (host) { host.classList.add('hide'); host.setAttribute('aria-hidden', 'true'); host.innerHTML = ''; }
+      }
+    }, [
+      el('div', { style: 'display:flex;align-items:center;gap:10px' }, [
+        el('span', { style: 'font-size:22px' }, opt.icon),
+        el('div', {}, [
+          el('div', { style: 'font-weight:600;font-size:13px' }, finalName),
+          el('div', { class: 'muted', style: 'font-size:11px;margin-top:2px' }, finalGreet)
+        ])
+      ]),
+      el('button', { type: 'button', class: 'btn btn-sm btn-primary' }, 'Select')
+    ]);
+  }));
+
+  modal({
+    title: 'Choose Industry for Payal (Indian Market)',
+    body: el('div', {}, [
+      el('p', { class: 'muted', style: 'font-size:13px;margin-bottom:8px' }, 'Select your business vertical to automatically pre-fill Payal\'s bilingual greeting, persona, and guardrails:'),
+      list
+    ]),
+    cancelText: 'Cancel'
+  });
 }
 
 function paintAgents() {
@@ -2392,31 +2521,106 @@ function onDial(numI, btn) {
    =========================================================================== */
 async function viewPresets(root) {
   root.appendChild(viewHead('Agent presets', 'Start with a production-minded intake flow, then customize the voice, instructions, calendar, and your own number.'));
-  const notice = el('div', { class: 'inbound-note', style: 'margin:0 0 18px' }, 'Presets are starting points. Personal Injury does not provide legal advice, and Dental does not diagnose. Review the workflow and consent language before using it live.');
+  const notice = el('div', { class: 'inbound-note', style: 'margin:0 0 14px' }, 'Presets are starting points. Personal Injury does not provide legal advice, and Dental does not diagnose. Review the workflow and consent language before using it live.');
+  
+  // Filter pills container
+  let currentFilter = 'all';
+  const filterRow = el('div', { class: 'preset-filter-row', style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px' });
   const host = el('div', { class: 'preset-grid' }, skeleton('sk-card', 6));
-  root.appendChild(notice); root.appendChild(host);
+  root.appendChild(notice);
+  root.appendChild(filterRow);
+  root.appendChild(host);
+
+  const filters = [
+    { id: 'all', label: 'All Presets' },
+    { id: 'india', label: '⭐ Indian Market (Payal)' },
+    { id: 'salon', label: '💇 Salon' },
+    { id: 'clinic', label: '🩺 Clinic' },
+    { id: 'hvac', label: '❄️ HVAC' },
+    { id: 'realtor', label: '🏢 Real Estate' },
+    { id: 'restaurant', label: '🍽️ Restaurant' },
+    { id: 'global', label: '🌐 Global / Other' }
+  ];
+
+  function renderCards(presets) {
+    host.innerHTML = '';
+    const filtered = presets.filter((p) => {
+      const isPayal = p.slug?.includes('payal') || (p.category && p.category.includes('_india'));
+      if (currentFilter === 'all') return true;
+      if (currentFilter === 'india') return isPayal;
+      if (currentFilter === 'global') return !isPayal;
+      return (p.category && p.category.includes(currentFilter)) || (p.slug && p.slug.includes(currentFilter));
+    });
+
+    filtered.forEach((p) => {
+      const isPayal = p.slug?.includes('payal') || (p.category && p.category.includes('_india'));
+      const privacy = p.recommendedPrivacyMode || p.privacyMode || 'standard';
+
+      let icon = (p.name || '?').slice(0, 1);
+      if (p.slug?.includes('salon')) icon = '💇';
+      else if (p.slug?.includes('clinic')) icon = '🩺';
+      else if (p.slug?.includes('hvac')) icon = '❄️';
+      else if (p.slug?.includes('realtor') || p.slug?.includes('real-estate')) icon = '🏢';
+      else if (p.slug?.includes('restaurant')) icon = '🍽️';
+      else if (isPayal) icon = '🇮🇳';
+
+      const card = el('article', {
+        class: 'card preset-card' + (isPayal ? ' preset-card-india' : ''),
+        style: isPayal ? 'border:1px solid rgba(234,179,8,0.4);background:linear-gradient(180deg, rgba(234,179,8,0.03) 0%, transparent 100%)' : ''
+      }, [
+        el('div', { class: 'flex items-center justify-between gap-2' }, [
+          el('div', { class: 'preset-icon', style: 'font-size:22px' }, icon),
+          isPayal
+            ? el('span', { class: 'badge-ready', style: 'background:rgba(234,179,8,0.15);color:#ca8a04;font-weight:600;border:1px solid rgba(234,179,8,0.3)' }, '⭐ Recommended for India')
+            : el('span', { class: 'badge-ready' }, privacy.replace(/_/g, ' '))
+        ]),
+        el('div', { class: 'flex items-center justify-between gap-2', style: 'margin-top:10px' }, [
+          el('h3', { class: 't-h3' }, p.name)
+        ]),
+        el('p', { class: 'muted', style: 'font-size:13px;margin:8px 0 12px' }, p.greeting || p.description || 'Editable voice-agent starting point.'),
+        el('div', { class: 'preset-meta', style: 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px' }, [
+          el('span', { style: 'font-size:11px' }, p.category || 'Voice agent'),
+          isPayal ? el('span', { style: 'font-size:11px;background:rgba(59,130,246,0.1);color:#3b82f6' }, '🇮🇳 Hindi / Hinglish / English') : null,
+          isPayal ? el('span', { style: 'font-size:11px;background:rgba(16,185,129,0.1);color:#10b981' }, 'Deepgram Aura-2') : null,
+          el('span', { style: 'font-size:11px' }, 'BYON ready')
+        ].filter(Boolean)),
+        el('button', { class: 'btn btn-primary', onclick: () => createFromPreset(p) }, 'Use this preset')
+      ]);
+      host.appendChild(card);
+    });
+
+    if (!filtered.length) {
+      host.appendChild(el('div', { class: 'empty muted', style: 'grid-column:1/-1;padding:32px;text-align:center' }, 'No presets found in this category.'));
+    }
+  }
+
+  function updateFilterPills() {
+    filterRow.innerHTML = '';
+    filters.forEach((f) => {
+      const active = f.id === currentFilter;
+      const btn = el('button', {
+        type: 'button',
+        class: 'btn btn-sm ' + (active ? 'btn-primary' : 'btn-ghost'),
+        style: active && f.id === 'india' ? 'background:#ca8a04;border-color:#ca8a04;color:#fff' : '',
+        onclick: () => {
+          currentFilter = f.id;
+          updateFilterPills();
+          renderCards(State.presets);
+        }
+      }, f.label);
+      filterRow.appendChild(btn);
+    });
+  }
+
   try {
     const out = await api('/api/presets');
     State.presets = out.presets || [];
+    updateFilterPills();
+    renderCards(State.presets);
+  } catch (e) {
     host.innerHTML = '';
-    State.presets.forEach((p) => {
-      const privacy = p.recommendedPrivacyMode || p.privacyMode || 'standard';
-      host.appendChild(el('article', { class: 'card preset-card' }, [
-        el('div', { class: 'preset-icon' }, (p.name || '?').slice(0, 1)),
-        el('div', { class: 'flex items-center justify-between gap-2' }, [
-          el('h3', { class: 't-h3' }, p.name),
-          el('span', { class: 'badge-ready' }, privacy.replace(/_/g, ' '))
-        ]),
-        el('p', { class: 'muted' }, p.description || 'Editable voice-agent starting point.'),
-        el('div', { class: 'preset-meta' }, [
-          el('span', {}, p.category || 'Voice agent'),
-          el('span', {}, 'BYON ready')
-        ]),
-        el('button', { class: 'btn btn-primary', onclick: () => createFromPreset(p) }, 'Use this preset')
-      ]));
-    });
-    if (!State.presets.length) host.appendChild(el('div', { class: 'empty muted' }, 'No presets are available.'));
-  } catch (e) { host.innerHTML = ''; host.appendChild(el('div', { class: 'card card-pad muted' }, e.message)); }
+    host.appendChild(el('div', { class: 'card card-pad muted' }, e.message));
+  }
 }
 
 function createFromPreset(preset) {
