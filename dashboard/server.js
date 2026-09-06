@@ -103,6 +103,206 @@ function readForm(req, cap = 64 * 1024) {
 }
 
 const PRESET_LIBRARY = [
+  // ============ PAYAL PRESETS (Indian Market — Phase 1 Deepgram Interim) ============
+  {
+    id: 'preset_payal_salon_v1',
+    slug: 'payal-salon-receptionist',
+    version: 1,
+    name: 'Payal - Salon Receptionist',
+    category: 'salon_india',
+    isSystem: true,
+    tts: {
+      provider: 'deepgram',
+      voice: 'aura-2-helena-en', // TODO: switch to rumik once overlay is built
+    },
+    greeting: 'Hi! Payal bol rahi hoon [your salon name] se. Aaj kya treatment lena hai?',
+    persona: `You are Payal, the AI receptionist for [salon name]. You are on a live phone call in India.
+
+HOW YOU SPEAK:
+- ONE or TWO short sentences per turn.
+- Warm, conversational Hindi/English/Hinglish mix.
+- Like a friendly neighborhood receptionist.
+
+THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call.
+
+STAGE 1 (Start): Greet in Hindi/English, ask what treatment they want.
+STAGE 2 (Main): Help with booking, capture name, phone, preferred time.
+STAGE 3 (End): Close warmly in 6-10 words. Example: "Dhanyawaad! Dekhte hain Tuesday ko. Bye!"`,
+    fields: [
+      'caller_name',
+      'callback_number',
+      'service_type',
+      'preferred_stylist',
+      'preferred_time',
+      'first_time_customer',
+    ],
+    guardrails: [
+      'No medical advice - refer chemical peels or severe skin allergies to salon manager',
+      'Always confirm appointment time and preferred stylist twice',
+      'Offer regular packages or discounts if customer asks',
+      'Capture preferred staff member if available',
+    ],
+  },
+  {
+    id: 'preset_payal_clinic_v1',
+    slug: 'payal-clinic-receptionist',
+    version: 1,
+    name: 'Payal - Clinic Receptionist',
+    category: 'clinic_india',
+    isSystem: true,
+    tts: {
+      provider: 'deepgram',
+      voice: 'aura-2-helena-en', // TODO: switch to rumik once overlay is built
+    },
+    greeting: 'Namaste! Payal speaking from [doctor name] clinic. Kya appointment chahiye?',
+    persona: `You are Payal, clinic receptionist for Dr. [Name]. You are on a live phone call in India.
+
+HOW YOU SPEAK:
+- ONE or TWO short sentences, warm and professional.
+- Hindi/English/Hinglish as caller prefers.
+- Respectful, empathetic tone.
+
+THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call.
+
+STAGE 1: Greet, ask if appointment or consultation needed.
+STAGE 2: Capture symptoms lightly, find available slot, get patient details.
+STAGE 3: Confirm appointment time twice. Example: "Doctor ko Friday 10am pe milenge. Theek hai?"`,
+    fields: [
+      'patient_name',
+      'phone',
+      'primary_symptoms',
+      'preferred_slot',
+      'is_follow_up',
+      'emergency_check',
+    ],
+    guardrails: [
+      'Absolute ban on medical diagnosis or prescribing medication - refer patient to doctor',
+      'Immediate escalation trigger for emergencies (chest pain, breathing difficulty, severe bleeding) - verbally redirect immediately to nearest emergency room / ambulance',
+      'Always confirm appointment date and time in repeat',
+      'Ask about patient history or previous visits if new patient',
+      'Clarify clinic consultation fee and walk-in policy',
+    ],
+  },
+  {
+    id: 'preset_payal_hvac_v1',
+    slug: 'payal-hvac-receptionist',
+    version: 1,
+    name: 'Payal - HVAC Service Receptionist',
+    category: 'hvac_india',
+    isSystem: true,
+    tts: {
+      provider: 'deepgram',
+      voice: 'aura-2-helena-en', // TODO: switch to rumik once overlay is built
+    },
+    greeting: 'Hello! Payal here from [company] AC services. Kya problem aa rahi hai AC mein — cooling nahi ho rahi ya service karwani hai?',
+    persona: `You are Payal, service receptionist for HVAC & AC company. You are on a live phone call in India.
+
+HOW YOU SPEAK:
+- ONE or TWO short sentences, quick and helpful.
+- Hindi/English/Hinglish, customer-friendly.
+- Show you understand AC issues.
+
+THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call.
+
+STAGE 1: Greet, ask what AC issue they have.
+STAGE 2: Understand urgency (emergency vs scheduled), get address, capture issue type.
+STAGE 3: Confirm service timing. "Technician ko 2 ghante mein bhejenge. Address confirm kijiye?"`,
+    fields: [
+      'customer_name',
+      'phone',
+      'issue_type',
+      'tonnage_brand',
+      'urgency',
+      'service_address',
+      'preferred_time',
+    ],
+    guardrails: [
+      'Emergency calls (complete heat failure, server room AC breakdown) get priority dispatch',
+      'Always confirm full address and landmark twice',
+      'Inform customer of visitation/inspection charges before technician dispatch',
+      'Ask if customer needs emergency weekend or night slot',
+    ],
+  },
+  {
+    id: 'preset_payal_realtor_v1',
+    slug: 'payal-realtor-lead',
+    version: 1,
+    name: 'Payal - Real Estate Lead Qualifier',
+    category: 'realtor_india',
+    isSystem: true,
+    tts: {
+      provider: 'deepgram',
+      voice: 'aura-2-helena-en', // TODO: switch to rumik once overlay is built
+    },
+    greeting: 'Hello! Payal bol rahi hoon [agency name] se. Aap property buy, sell ya rent karne ke liye call kar rahe hain?',
+    persona: `You are Payal, real estate inquiry receptionist. You are on a live phone call in India.
+
+HOW YOU SPEAK:
+- ONE or TWO short sentences, warm and courteous.
+- Hindi/English/Hinglish mirroring.
+- Professional and encouraging.
+
+THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call.
+
+STAGE 1: Greet and ask property objective (buy, sell, rent).
+STAGE 2: Capture budget, preferred location, BHK configuration, timeline.
+STAGE 3: Offer site visit scheduling or WhatsApp brochure dispatch. Example: "Main details WhatsApp pe send karti hoon. Bye!"`,
+    fields: [
+      'caller_name',
+      'phone',
+      'intent_type',
+      'preferred_location',
+      'configuration_bhk',
+      'budget_range',
+      'possession_timeline',
+      'site_visit_date',
+    ],
+    guardrails: [
+      'Do not quote locked unit rates or false inventory availability',
+      'Confirm budget and location preferences before proposing site visit',
+      'Schedule WhatsApp brochure transmission upon caller consent',
+      'Always confirm caller phone number and callback time',
+    ],
+  },
+  {
+    id: 'preset_payal_restaurant_v1',
+    slug: 'payal-restaurant-reservations',
+    version: 1,
+    name: 'Payal - Restaurant Reservations',
+    category: 'restaurant_india',
+    isSystem: true,
+    tts: {
+      provider: 'deepgram',
+      voice: 'aura-2-helena-en', // TODO: switch to rumik once overlay is built
+    },
+    greeting: 'Namaste! Payal speaking from [restaurant name]. Table reservation karni hai ya timings janne hain?',
+    persona: `You are Payal, restaurant table reservation receptionist. You are on a live phone call in India.
+
+HOW YOU SPEAK:
+- ONE or TWO short sentences, polite, cheerful, and upbeat.
+- Hindi/English/Hinglish mirroring.
+
+THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call.
+
+STAGE 1: Greet and ask booking date/time or question.
+STAGE 2: Capture guest count, special occasion, seating preference.
+STAGE 3: Confirm reservation details clearly. Example: "Friday raat 8 baje 4 logon ki table confirm hai. Dhanyawaad!"`,
+    fields: [
+      'guest_name',
+      'contact_number',
+      'party_size',
+      'reservation_date',
+      'reservation_time',
+      'seating_preference',
+      'special_occasion',
+    ],
+    guardrails: [
+      'Always read back party size, date, and time slot twice for confirmation',
+      'Direct severe allergy or special dietary questions to duty manager',
+      'Enforce table holding grace period limit (15 minutes)',
+      'Confirm indoor vs outdoor/terrace seating preference',
+    ],
+  },
   {
     id: 'preset_personal_injury_v1', slug: 'personal-injury-intake', version: 1,
     name: 'Personal Injury Intake', category: 'legal', isSystem: true,
@@ -217,7 +417,15 @@ async function boot() {
       await db.query(
         `INSERT INTO presets (id, slug, name, category, version, is_system, greeting, persona, fields, guardrails, created_at)
          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
-         ON CONFLICT (id) DO NOTHING`,
+         ON CONFLICT (id) DO UPDATE SET
+           greeting = EXCLUDED.greeting,
+           persona = EXCLUDED.persona,
+           fields = EXCLUDED.fields,
+           guardrails = EXCLUDED.guardrails,
+           name = EXCLUDED.name,
+           category = EXCLUDED.category,
+           slug = EXCLUDED.slug,
+           version = EXCLUDED.version`,
         [preset.id, preset.slug, preset.name, preset.category, preset.version || 1, true, preset.greeting, preset.persona || null, JSON.stringify(preset.fields || []), JSON.stringify(preset.guardrails || [])]
       ).catch(() => {});
     }
@@ -1485,7 +1693,16 @@ async function apiLeadActivitiesCreate(req, res, ctx, leadId) {
 async function apiAgentsList(req, res, ctx) {
   if (db.isPostgres) {
     const { rows } = await db.query('SELECT * FROM agents WHERE tenant_id = $1 ORDER BY created_at DESC', [ctx.tenant.id]);
-    const agents = rows.map((a) => publicAgent({ ...a, tenantId: a.tenant_id, presetId: a.preset_id, createdAt: a.created_at.toISOString() }));
+    const agents = rows.map((a) => { 
+      const rawDate = a.createdAt || a.created_at; 
+      const isoDate = rawDate ? (rawDate instanceof Date ? rawDate.toISOString() : new Date(rawDate).toISOString()) : new Date().toISOString(); 
+      return publicAgent({ 
+        ...a, 
+        tenantId: a.tenantId || a.tenant_id, 
+        presetId: a.presetId || a.preset_id, 
+        createdAt: isoDate 
+      }); 
+    });
     return core.sendJson(res, 200, { agents });
   }
   const agents = core.db().agents
@@ -1508,17 +1725,19 @@ async function apiAgentsCreate(req, res, ctx) {
     preset = b.presetId ? core.db().presets.find((p) => p.id === String(b.presetId) && (p.isSystem || p.tenantId === ctx.tenant.id)) : null;
     if (b.presetId && !preset) return core.sendJson(res, 404, { error: 'preset not found', code: 'not_found' });
   }
-  const ttsIn = b.tts || {};
+  const ttsIn = b.tts || (preset && preset.tts) || {};
+  const ttsProvider = ttsIn.provider || providers.tts.id;
   const model = ttsIn.model === 'muga' ? 'muga' : providers.tts.model;
   const speaker = providers.TTS_SPEAKERS.has(ttsIn.speaker) ? ttsIn.speaker : 'speaker_1';
   const f0 = Number.isFinite(ttsIn.f0_up_key) ? Math.max(-12, Math.min(12, ttsIn.f0_up_key | 0)) : 0;
+  const agentTts = ttsIn.voice ? { provider: ttsProvider, voice: ttsIn.voice } : { provider: ttsProvider, model, speaker, f0_up_key: f0 };
 
   const agent = {
     id: core.genId('ag_'),
     tenantId: ctx.tenant.id,
     name: String(b.name || (preset && preset.name) || 'Untitled Agent').slice(0, 60),
-    persona: String(b.persona || (preset ? `${preset.name}. Collect: ${(preset.fields||[]).join(', ')}. Guardrails: ${(preset.guardrails||[]).join('; ')}.` : '')).slice(0, 1500),
-    tts: { provider: providers.tts.id, model, speaker, f0_up_key: f0 },
+    persona: String(b.persona || (preset && (preset.persona || `${preset.name}. Collect: ${(preset.fields||[]).join(', ')}. Guardrails: ${(preset.guardrails||[]).join('; ')}.`)) || '').slice(0, 1500),
+    tts: agentTts,
     greeting: String(b.greeting || (preset && preset.greeting) || '').slice(0, 300),
     presetId: preset ? preset.id : null,
     telephony: { did: String(b.did || providers.telephony.did).replace(/[^0-9]/g, '') || providers.telephony.did },
@@ -1567,7 +1786,9 @@ async function apiAgentsUpdate(req, res, ctx) {
       [name, persona, greeting, telephony, tts, id]
     );
     const row = upRes.rows[0];
-    updated = { ...row, tenantId: row.tenant_id, presetId: row.preset_id, createdAt: row.created_at.toISOString() };
+    const crAt = row.createdAt || row.created_at;
+    const createdAt = (crAt instanceof Date) ? crAt.toISOString() : (crAt ? String(crAt) : new Date().toISOString());
+    updated = { ...row, tenantId: row.tenantId || row.tenant_id, presetId: row.presetId || row.preset_id, createdAt };
   } else {
     const d = core.db();
     const agent = d.agents.find((a) => a.id === id);
@@ -1751,9 +1972,24 @@ function tenantDemoLinks(tenantId) {
 async function apiDemoLinksList(req, res, ctx) {
   if (db.isPostgres) {
     const { rows } = await db.query('SELECT * FROM demo_links WHERE tenant_id = $1 ORDER BY created_at DESC', [ctx.tenant.id]);
-    const links = rows.map(r => demoLinks.publicDemoLink({
-      ...r, tenantId: r.tenant_id, agentId: r.agent_id, tokenHash: r.token_hash, maxStarts: r.max_starts, maxSessionSeconds: r.max_session_seconds, expiresAt: r.expires_at ? r.expires_at.toISOString() : null, revokedAt: r.revoked_at ? r.revoked_at.toISOString() : null, revokedBy: r.revoked_by, createdBy: r.created_by, createdAt: r.created_at.toISOString()
-    }));
+    const links = rows.map(r => {
+      const expAt = r.expiresAt || r.expires_at;
+      const revAt = r.revokedAt || r.revoked_at;
+      const crAt = r.createdAt || r.created_at;
+      return demoLinks.publicDemoLink({
+        ...r,
+        tenantId: r.tenantId || r.tenant_id,
+        agentId: r.agentId || r.agent_id,
+        tokenHash: r.tokenHash || r.token_hash,
+        maxStarts: r.maxStarts || r.max_starts,
+        maxSessionSeconds: r.maxSessionSeconds || r.max_session_seconds,
+        expiresAt: expAt ? (expAt instanceof Date ? expAt.toISOString() : String(expAt)) : null,
+        revokedAt: revAt ? (revAt instanceof Date ? revAt.toISOString() : String(revAt)) : null,
+        revokedBy: r.revokedBy || r.revoked_by,
+        createdBy: r.createdBy || r.created_by,
+        createdAt: crAt ? (crAt instanceof Date ? crAt.toISOString() : String(crAt)) : new Date().toISOString()
+      });
+    });
     return core.sendJson(res, 200, { demoLinks: links });
   }
   const links = tenantDemoLinks(ctx.tenant.id)
@@ -2252,21 +2488,31 @@ async function apiPresets(req, res, ctx) {
     );
     const presets = rows.map((p) => ({
       id: p.id,
-      tenantId: p.tenant_id,
+      tenantId: p.tenantId || p.tenant_id,
       slug: p.slug,
       name: p.name,
       category: p.category,
       version: p.version,
-      isSystem: p.is_system,
+      isSystem: p.isSystem ?? p.is_system,
       greeting: p.greeting,
       persona: p.persona,
       fields: p.fields || [],
       guardrails: p.guardrails || [],
-      createdAt: toIso(p.created_at),
+      createdAt: toIso(p.createdAt || p.created_at),
     }));
+    presets.sort((a, b) => {
+      const aP = a.slug?.includes('payal') ? 0 : (a.slug?.includes('ria') ? 1 : 2);
+      const bP = b.slug?.includes('payal') ? 0 : (b.slug?.includes('ria') ? 1 : 2);
+      return aP - bP;
+    });
     return core.sendJson(res, 200, { presets });
   }
-  const presets = core.db().presets.filter((p) => p.isSystem || p.tenantId === ctx.tenant.id);
+  let presets = core.db().presets.filter((p) => p.isSystem || p.tenantId === ctx.tenant.id);
+  presets.sort((a, b) => {
+    const aP = a.slug?.includes('payal') ? 0 : (a.slug?.includes('ria') ? 1 : 2);
+    const bP = b.slug?.includes('payal') ? 0 : (b.slug?.includes('ria') ? 1 : 2);
+    return aP - bP;
+  });
   core.sendJson(res, 200, { presets });
 }
 
@@ -2533,13 +2779,13 @@ async function apiByonList(req, res, ctx) {
     );
     const connections = rows.map((x) => ({
       id: x.id,
-      tenantId: x.tenant_id,
+      tenantId: x.tenantId || x.tenant_id,
       provider: x.provider,
       address: x.address,
       label: x.label,
       status: x.status,
-      createdBy: x.created_by,
-      createdAt: toIso(x.created_at),
+      createdBy: x.createdBy || x.created_by,
+      createdAt: toIso(x.createdAt || x.created_at),
     }));
     return core.sendJson(res, 200, { connections });
   }
