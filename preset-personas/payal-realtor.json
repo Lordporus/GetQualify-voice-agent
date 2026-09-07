@@ -24,9 +24,11 @@
     "Always confirm caller phone number and callback time"
   ],
   "tts": {
-    "provider": "deepgram",
-    "voice": "aura-2-helena-en",
-    "_todo": "switch to rumik once overlay is built"
+    "provider": "rumik",
+    "model": "mulberry",
+    "speaker": "speaker_2",
+    "f0_up_key": 0,
+    "description": "Courteous real estate inquiry receptionist"
   },
   "stt": {
     "provider": "deepgram",

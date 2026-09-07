@@ -87,8 +87,8 @@ async function run() {
       }
 
       const res = await client.query(
-        `INSERT INTO presets (id, tenant_id, slug, name, category, version, is_system, greeting, persona, fields, guardrails, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        `INSERT INTO presets (id, tenant_id, slug, name, category, version, is_system, greeting, persona, fields, guardrails, tts, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
          ON CONFLICT (id) DO NOTHING`,
         [
           p.id,
@@ -102,6 +102,7 @@ async function run() {
           p.persona || null,
           JSON.stringify(p.fields || []),
           JSON.stringify(p.guardrails || []),
+          JSON.stringify(p.tts || { model: 'mulberry', speaker: 'speaker_2', f0_up_key: 0 }),
           p.createdAt || new Date().toISOString(),
         ]
       );

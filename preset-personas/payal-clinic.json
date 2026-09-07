@@ -24,9 +24,11 @@
   ],
   "emergency_safeguard_phase2_note": "Technical safeguard (Phase 2, not yet implemented): in addition to the verbal redirect to emergency services, flag emergency-related extracted fields (chest pain, breathing difficulty, severe bleeding) as a logged event or webhook notification so the business owner is alerted independent of what the AI said on the call. Tracked as a follow-up task, not required for Phase 1 launch.",
   "tts": {
-    "provider": "deepgram",
-    "voice": "aura-2-helena-en",
-    "_todo": "switch to rumik once overlay is built"
+    "provider": "rumik",
+    "model": "mulberry",
+    "speaker": "speaker_2",
+    "f0_up_key": 0,
+    "description": "Polite, empathetic clinic receptionist"
   },
   "stt": {
     "provider": "deepgram",
