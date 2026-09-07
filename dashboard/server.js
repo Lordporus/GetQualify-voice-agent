@@ -441,6 +441,25 @@ async function boot() {
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `).catch(() => {});
+    await db.query(`
+      ALTER TABLE agents ADD COLUMN IF NOT EXISTS dograh_workflow_id INTEGER;
+    `).catch(() => {});
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS tenant_call_routing (
+        id TEXT PRIMARY KEY,
+        tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+        phone_number TEXT NOT NULL DEFAULT '+918065354620',
+        inbound_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        outbound_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+        dograh_inbound_workflow_id INTEGER,
+        dograh_outbound_workflow_id INTEGER,
+        updated_at TIMESTAMPTZ DEFAULT NOW(),
+        CONSTRAINT uq_tenant_routing_phone UNIQUE (tenant_id, phone_number)
+      );
+    `).catch(() => {});
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS idx_tenant_call_routing_tenant ON tenant_call_routing(tenant_id);
+    `).catch(() => {});
   }
 
   const hasDemo = DEMO_EMAIL && existing.users.some((u) => u.email === DEMO_EMAIL);
@@ -551,7 +570,9 @@ function publicTenant(t) {
 function publicAgent(a) {
   return {
     id: a.id, name: a.name, persona: a.persona, tts: a.tts,
-    greeting: a.greeting, telephony: a.telephony, presetId: a.presetId || null, createdAt: a.createdAt,
+    greeting: a.greeting, telephony: a.telephony, presetId: a.presetId || null,
+    dograhWorkflowId: a.dograhWorkflowId || a.dograh_workflow_id || null,
+    createdAt: a.createdAt,
   };
 }
 
@@ -1732,6 +1753,9 @@ async function apiAgentsCreate(req, res, ctx) {
   const f0 = Number.isFinite(ttsIn.f0_up_key) ? Math.max(-12, Math.min(12, ttsIn.f0_up_key | 0)) : 0;
   const agentTts = ttsIn.voice ? { provider: ttsProvider, voice: ttsIn.voice } : { provider: ttsProvider, model, speaker, f0_up_key: f0 };
 
+  const rawWf = b.dograhWorkflowId !== undefined ? b.dograhWorkflowId : (preset && (preset.dograhWorkflowId || preset.dograh_workflow_id));
+  const dograhWorkflowId = Number.isInteger(Number(rawWf)) && Number(rawWf) > 0 ? Number(rawWf) : null;
+
   const agent = {
     id: core.genId('ag_'),
     tenantId: ctx.tenant.id,
@@ -1741,13 +1765,14 @@ async function apiAgentsCreate(req, res, ctx) {
     greeting: String(b.greeting || (preset && preset.greeting) || '').slice(0, 300),
     presetId: preset ? preset.id : null,
     telephony: { did: String(b.did || providers.telephony.did).replace(/[^0-9]/g, '') || providers.telephony.did },
+    dograhWorkflowId,
     createdAt: new Date().toISOString(),
   };
 
   if (db.isPostgres) {
     await db.query(
-      'INSERT INTO agents (id, tenant_id, name, persona, tts, greeting, telephony, preset_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
-      [agent.id, agent.tenantId, agent.name, agent.persona, agent.tts, agent.greeting, agent.telephony, agent.presetId, agent.createdAt]
+      'INSERT INTO agents (id, tenant_id, name, persona, tts, greeting, telephony, preset_id, dograh_workflow_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
+      [agent.id, agent.tenantId, agent.name, agent.persona, agent.tts, agent.greeting, agent.telephony, agent.presetId, agent.dograhWorkflowId, agent.createdAt]
     );
   } else {
     await core.mutate((d) => { d.agents.push(agent); });
@@ -1781,10 +1806,13 @@ async function apiAgentsUpdate(req, res, ctx) {
     const name = b.name != null ? String(b.name).slice(0, 60) : aRow.name;
     const persona = b.persona != null ? String(b.persona).slice(0, 1500) : aRow.persona;
     const greeting = b.greeting != null ? String(b.greeting).slice(0, 300) : aRow.greeting;
+    const wfId = b.dograhWorkflowId !== undefined
+      ? (Number.isInteger(Number(b.dograhWorkflowId)) && Number(b.dograhWorkflowId) > 0 ? Number(b.dograhWorkflowId) : null)
+      : (aRow.dograh_workflow_id || aRow.dograhWorkflowId || null);
     
     const upRes = await db.query(
-      'UPDATE agents SET name = $1, persona = $2, greeting = $3, telephony = $4, tts = $5 WHERE id = $6 RETURNING *',
-      [name, persona, greeting, telephony, tts, id]
+      'UPDATE agents SET name = $1, persona = $2, greeting = $3, telephony = $4, tts = $5, dograh_workflow_id = $6 WHERE id = $7 RETURNING *',
+      [name, persona, greeting, telephony, tts, wfId, id]
     );
     const row = upRes.rows[0];
     const crAt = row.createdAt || row.created_at;
@@ -1813,6 +1841,9 @@ async function apiAgentsUpdate(req, res, ctx) {
         if (Number.isFinite(b.tts.f0_up_key)) t.f0_up_key = Math.max(-12, Math.min(12, b.tts.f0_up_key | 0));
         t.provider = providers.tts.id;
         a.tts = t;
+      }
+      if (b.dograhWorkflowId !== undefined) {
+        a.dograhWorkflowId = Number.isInteger(Number(b.dograhWorkflowId)) && Number(b.dograhWorkflowId) > 0 ? Number(b.dograhWorkflowId) : null;
       }
       updated = a;
     });
@@ -2115,6 +2146,200 @@ async function apiPublicDemoSession(req, res, token) {
   }
 }
 
+// GET /api/routing -> Fetch current call routing and available telephony agents for tenant.
+async function apiRoutingGet(req, res, ctx) {
+  try {
+    let rawAgents = [];
+    if (db.isPostgres) {
+      const aRes = await db.query('SELECT * FROM agents WHERE tenant_id = $1 ORDER BY created_at DESC', [ctx.tenant.id]);
+      rawAgents = aRes.rows;
+    } else {
+      rawAgents = (core.db().agents || []).filter((a) => (a.tenantId || a.tenant_id) === ctx.tenant.id);
+    }
+
+    const availableAgents = rawAgents.map((a) => {
+      const wfId = a.dograhWorkflowId || a.dograh_workflow_id || null;
+      return {
+        id: a.id,
+        name: a.name,
+        telephonyReady: Boolean(wfId),
+        dograhWorkflowId: wfId,
+      };
+    });
+
+    let routingRow = null;
+    if (db.isPostgres) {
+      const rRes = await db.query('SELECT * FROM tenant_call_routing WHERE tenant_id = $1 LIMIT 1', [ctx.tenant.id]);
+      routingRow = rRes.rows[0] || null;
+    } else {
+      routingRow = (core.db().tenantCallRouting || []).find((r) => (r.tenantId || r.tenant_id) === ctx.tenant.id) || null;
+    }
+
+    const phoneNumber = (routingRow && (routingRow.phoneNumber || routingRow.phone_number)) || providers.telephony.did || '+918065354620';
+    const inboundAgentId = routingRow ? (routingRow.inboundAgentId || routingRow.inbound_agent_id) : null;
+    const outboundAgentId = routingRow ? (routingRow.outboundAgentId || routingRow.outbound_agent_id) : null;
+
+    const inboundAgent = availableAgents.find((a) => a.id === inboundAgentId) || null;
+    const outboundAgent = availableAgents.find((a) => a.id === outboundAgentId) || null;
+
+    core.sendJson(res, 200, {
+      routing: {
+        phoneNumber,
+        inboundAgentId: inboundAgent ? inboundAgent.id : null,
+        outboundAgentId: outboundAgent ? outboundAgent.id : null,
+        dograhInboundWorkflowId: routingRow ? (routingRow.dograhInboundWorkflowId || routingRow.dograh_inbound_workflow_id) : (inboundAgent ? inboundAgent.dograhWorkflowId : null),
+        dograhOutboundWorkflowId: routingRow ? (routingRow.dograhOutboundWorkflowId || routingRow.dograh_outbound_workflow_id) : (outboundAgent ? outboundAgent.dograhWorkflowId : null),
+        inboundAgent,
+        outboundAgent,
+      },
+      availableAgents,
+    });
+  } catch (err) {
+    core.sendJson(res, 500, { error: err.message || 'Failed to fetch routing configuration', code: 'routing_fetch_failed' });
+  }
+}
+
+// POST /api/routing/update -> Update inbound/outbound agent routing for tenant.
+async function apiRoutingUpdate(req, res, ctx) {
+  const b = ctx.body || {};
+  const inboundAgentId = String(b.inboundAgentId || '').trim();
+  const outboundAgentId = String(b.outboundAgentId || '').trim();
+
+  if (!inboundAgentId || !outboundAgentId) {
+    return core.sendJson(res, 422, {
+      error: 'inboundAgentId and outboundAgentId are both required',
+      code: 'missing_routing_agents',
+    });
+  }
+
+  // 1. Fetch agents and verify ownership
+  let inboundAgent = null;
+  let outboundAgent = null;
+
+  if (db.isPostgres) {
+    const inRes = await db.query('SELECT * FROM agents WHERE id = $1', [inboundAgentId]);
+    if (inRes.rowCount === 0) return core.sendJson(res, 404, { error: 'Inbound agent not found', code: 'agent_not_found' });
+    const inRow = inRes.rows[0];
+    if ((inRow.tenantId || inRow.tenant_id) !== ctx.tenant.id) {
+      return core.sendJson(res, 403, { error: 'Inbound agent does not belong to your tenant', code: 'forbidden' });
+    }
+    inboundAgent = inRow;
+
+    const outRes = await db.query('SELECT * FROM agents WHERE id = $1', [outboundAgentId]);
+    if (outRes.rowCount === 0) return core.sendJson(res, 404, { error: 'Outbound agent not found', code: 'agent_not_found' });
+    const outRow = outRes.rows[0];
+    if ((outRow.tenantId || outRow.tenant_id) !== ctx.tenant.id) {
+      return core.sendJson(res, 403, { error: 'Outbound agent does not belong to your tenant', code: 'forbidden' });
+    }
+    outboundAgent = outRow;
+  } else {
+    const d = core.db();
+    const inRow = (d.agents || []).find((a) => a.id === inboundAgentId);
+    if (!inRow) return core.sendJson(res, 404, { error: 'Inbound agent not found', code: 'agent_not_found' });
+    if ((inRow.tenantId || inRow.tenant_id) !== ctx.tenant.id) {
+      return core.sendJson(res, 403, { error: 'Inbound agent does not belong to your tenant', code: 'forbidden' });
+    }
+    inboundAgent = inRow;
+
+    const outRow = (d.agents || []).find((a) => a.id === outboundAgentId);
+    if (!outRow) return core.sendJson(res, 404, { error: 'Outbound agent not found', code: 'agent_not_found' });
+    if ((outRow.tenantId || outRow.tenant_id) !== ctx.tenant.id) {
+      return core.sendJson(res, 403, { error: 'Outbound agent does not belong to your tenant', code: 'forbidden' });
+    }
+    outboundAgent = outRow;
+  }
+
+  // 2. Validate telephony readiness (dograh_workflow_id must be assigned)
+  const inWorkflowId = inboundAgent.dograhWorkflowId || inboundAgent.dograh_workflow_id;
+  if (!inWorkflowId) {
+    return core.sendJson(res, 422, {
+      error: `Agent '${inboundAgent.name}' does not have a telephony workflow linked. Please select a telephony-ready agent (e.g. Payal).`,
+      code: 'agent_not_telephony_ready',
+    });
+  }
+
+  const outWorkflowId = outboundAgent.dograhWorkflowId || outboundAgent.dograh_workflow_id;
+  if (!outWorkflowId) {
+    return core.sendJson(res, 422, {
+      error: `Agent '${outboundAgent.name}' does not have a telephony workflow linked. Please select a telephony-ready agent (e.g. Payal).`,
+      code: 'agent_not_telephony_ready',
+    });
+  }
+
+  const phoneNumber = String(b.phoneNumber || providers.telephony.did || '+918065354620').trim();
+
+  // 3. Synchronize inbound workflow with Dograh
+  if (providers.telephony && providers.telephony.live && typeof providers.telephony.updateInboundNumberWorkflow === 'function') {
+    try {
+      await providers.telephony.updateInboundNumberWorkflow(inWorkflowId);
+    } catch (e) {
+      return handleProviderError(res, e);
+    }
+  }
+
+  // 4. Persist to database
+  const routingId = core.genId('tcr_');
+  const now = new Date().toISOString();
+
+  if (db.isPostgres) {
+    const q = `
+      INSERT INTO tenant_call_routing (
+        id, tenant_id, phone_number, inbound_agent_id, outbound_agent_id,
+        dograh_inbound_workflow_id, dograh_outbound_workflow_id, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
+      ON CONFLICT (tenant_id, phone_number) DO UPDATE SET
+        inbound_agent_id = EXCLUDED.inbound_agent_id,
+        outbound_agent_id = EXCLUDED.outbound_agent_id,
+        dograh_inbound_workflow_id = EXCLUDED.dograh_inbound_workflow_id,
+        dograh_outbound_workflow_id = EXCLUDED.dograh_outbound_workflow_id,
+        updated_at = NOW()
+      RETURNING *;
+    `;
+    const rRes = await db.query(q, [
+      routingId, ctx.tenant.id, phoneNumber, inboundAgentId, outboundAgentId,
+      inWorkflowId, outWorkflowId,
+    ]);
+    const saved = rRes.rows[0];
+    return core.sendJson(res, 200, {
+      success: true,
+      routing: {
+        id: saved.id,
+        phoneNumber: saved.phoneNumber || saved.phone_number,
+        inboundAgentId: saved.inboundAgentId || saved.inbound_agent_id,
+        outboundAgentId: saved.outboundAgentId || saved.outbound_agent_id,
+        dograhInboundWorkflowId: saved.dograhInboundWorkflowId || saved.dograh_inbound_workflow_id,
+        dograhOutboundWorkflowId: saved.dograhOutboundWorkflowId || saved.dograh_outbound_workflow_id,
+      },
+    });
+  } else {
+    let saved = null;
+    await core.mutate((d) => {
+      if (!Array.isArray(d.tenantCallRouting)) d.tenantCallRouting = [];
+      const idx = d.tenantCallRouting.findIndex((r) => (r.tenantId || r.tenant_id) === ctx.tenant.id);
+      const record = {
+        id: idx >= 0 ? d.tenantCallRouting[idx].id : routingId,
+        tenantId: ctx.tenant.id,
+        phoneNumber,
+        inboundAgentId,
+        outboundAgentId,
+        dograhInboundWorkflowId: inWorkflowId,
+        dograhOutboundWorkflowId: outWorkflowId,
+        updatedAt: now,
+      };
+      if (idx >= 0) {
+        d.tenantCallRouting[idx] = record;
+      } else {
+        d.tenantCallRouting.push(record);
+      }
+      saved = record;
+    });
+    return core.sendJson(res, 200, {
+      success: true,
+      routing: saved,
+    });
+  }
+}
+
 // GET /api/telephony/status -> VoBiz configuration status from Dograh.
 async function apiTelephonyStatus(req, res) {
   try {
@@ -2125,8 +2350,49 @@ async function apiTelephonyStatus(req, res) {
   }
 }
 
+async function resolveTenantOutboundAgentId(tenantId) {
+  if (db.isPostgres) {
+    const res = await db.query(
+      'SELECT outbound_agent_id FROM tenant_call_routing WHERE tenant_id = $1 LIMIT 1',
+      [tenantId]
+    );
+    if (res.rows.length > 0) {
+      return res.rows[0].outboundAgentId || res.rows[0].outbound_agent_id || null;
+    }
+  } else {
+    const d = core.db();
+    const r = (d.tenantCallRouting || []).find((row) => (row.tenantId || row.tenant_id) === tenantId);
+    if (r) return r.outboundAgentId || r.outbound_agent_id || null;
+  }
+  return null;
+}
+
+async function resolveAgentDograhWorkflowId(agentId, tenantId) {
+  if (!agentId) return null;
+  if (db.isPostgres) {
+    const res = await db.query(
+      'SELECT dograh_workflow_id FROM agents WHERE id = $1 AND (tenant_id = $2 OR tenant_id = $3) LIMIT 1',
+      [agentId, tenantId, 'default']
+    );
+    if (res.rows.length > 0) {
+      const wId = res.rows[0].dograhWorkflowId || res.rows[0].dograh_workflow_id;
+      return wId ? Number(wId) : null;
+    }
+  } else {
+    const d = core.db();
+    const agent = (d.agents || []).find(
+      (a) => a.id === agentId && ((a.tenantId || a.tenant_id) === tenantId || (a.tenantId || a.tenant_id) === 'default')
+    );
+    if (agent) {
+      const wId = agent.dograhWorkflowId || agent.dograh_workflow_id;
+      return wId ? Number(wId) : null;
+    }
+  }
+  return null;
+}
+
 // POST /api/telephony/dial -> places a REAL paid call. GUARDED behind confirm.
-// Body: { number: string, confirm: true }
+// Body: { number: string, confirm: true, agentId?: string }
 // Accepts standard E.164 format (e.g. +14155552671, +447911123456) or bare 10-digit Indian mobile.
 async function apiTelephonyDial(req, res, ctx) {
   const b = ctx.body || {};
@@ -2144,6 +2410,16 @@ async function apiTelephonyDial(req, res, ctx) {
         error: 'HIPAA mode blocks phone calls until a verified no-recording Dograh workflow is configured',
         code: 'privacy_workflow_required',
       });
+    }
+  } else {
+    // 1. Check if an explicit agentId was passed in the request body, or resolve from tenant_call_routing
+    const targetAgentId = b.agentId || await resolveTenantOutboundAgentId(ctx.tenant.id);
+    if (targetAgentId) {
+      workflowId = await resolveAgentDograhWorkflowId(targetAgentId, ctx.tenant.id);
+    }
+    // Fallback to DOGRAH_WORKFLOW_ID only if no tenant routing is set
+    if (!workflowId) {
+      workflowId = Number(process.env.DOGRAH_WORKFLOW_ID || 1);
     }
   }
   try {
@@ -4668,6 +4944,7 @@ const server = http.createServer(async (req, res) => {
           if (!callId || callId.includes('/')) return core.sendJson(res, 404, { error: 'call not found', code: 'not_found' });
           return core.requireAuth(req, res, (rq, rs, ctx) => apiCallRecordingGet(rq, rs, ctx, callId));
         }
+        if (route === '/api/routing') return core.requireAuth(req, res, apiRoutingGet);
         return core.sendJson(res, 404, { error: 'no such endpoint', code: 'not_found' });
       }
 
@@ -4756,6 +5033,7 @@ const server = http.createServer(async (req, res) => {
       if (route === '/api/voice/session') return core.requireAuth(req, res, apiVoiceSession, body);
       if (route === '/api/demo-links') return core.requireRole(req, res, 'owner', apiDemoLinksCreate, body);
       if (route === '/api/demo-links/revoke') return core.requireRole(req, res, 'owner', apiDemoLinksRevoke, body);
+      if (route === '/api/routing/update') return core.requireAuth(req, res, apiRoutingUpdate, body);
       if (route === '/api/telephony/dial') return core.requireAuth(req, res, apiTelephonyDial, body);
       if (route === '/api/payment-intents') return core.requireAuth(req, res, apiPaymentIntentCreate, body);
       if (route === '/api/support/tickets') return core.requireAuth(req, res, apiSupportCreate, body);

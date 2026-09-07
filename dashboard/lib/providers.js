@@ -21,7 +21,7 @@
  */
 'use strict';
 
-const { httpsPost, httpsGet } = require('./core');
+const { httpsPost, httpsPut, httpsGet } = require('./core');
 
 // Rumik sits behind Cloudflare, which 403s non-browser user-agents. NEVER remove.
 const BROWSER_UA = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124 Safari/537.36';
@@ -361,7 +361,7 @@ function dograhConnection() {
   try { parsed = new URL(/^https?:\/\//i.test(raw) ? raw : `https://${raw}`); } catch {
     throw new ProviderError('DOGRAH_BASE_URL is invalid', 503, 'not_configured');
   }
-  if (parsed.protocol !== 'https:') {
+  if (parsed.protocol !== 'https:' && process.env.DOGRAH_ALLOW_HTTP !== 'true') {
     throw new ProviderError('DOGRAH_BASE_URL must use HTTPS', 503, 'not_configured');
   }
   return {
@@ -417,11 +417,12 @@ const telVobiz = {
     const connection = dograhConnection();
     const headers = { 'X-API-Key': process.env.DOGRAH_API_KEY };
     let up;
-    if (method === 'POST') {
+    if (method === 'POST' || method === 'PUT') {
       const buf = Buffer.from(JSON.stringify(payload || {}));
       headers['Content-Type'] = 'application/json';
       headers['Content-Length'] = buf.length;
-      up = await httpsPost(connection.host, connection.prefix + pathname, headers, buf);
+      const fn = method === 'PUT' ? httpsPut : httpsPost;
+      up = await fn(connection.host, connection.prefix + pathname, headers, buf);
     } else {
       up = await httpsGet(connection.host, connection.prefix + pathname, headers);
     }
@@ -517,6 +518,29 @@ const telVobiz = {
     if (result.up.status < 200 || result.up.status >= 300) {
       throw new ProviderError('Dograh could not initiate the VoBiz call', upstreamStatus(result.up.status),
         'upstream', upstreamMessage(result.data, 'The call was not placed.'));
+    }
+    return { status: result.up.status, data: result.data };
+  },
+
+  // Update a phone number's assigned inbound workflow in Dograh.
+  async updateInboundNumberWorkflow(workflowId, phoneNumberId, configId) {
+    const cfgId = Number.isInteger(configId) && configId > 0 ? configId : positiveIntEnv('DOGRAH_TELEPHONY_CONFIG_ID');
+    const phId = Number.isInteger(phoneNumberId) && phoneNumberId > 0 ? phoneNumberId : positiveIntEnv('DOGRAH_PHONE_NUMBER_ID');
+    const wfId = Number(workflowId);
+    if (!Number.isInteger(wfId) || wfId <= 0) {
+      throw new ProviderError('workflowId must be a positive integer', 422, 'invalid_workflow_id');
+    }
+    const result = await this.request('PUT',
+      `/api/v1/organizations/telephony-configs/${cfgId}/phone-numbers/${phId}`, {
+        inbound_workflow_id: wfId,
+      });
+    if (result.up.status < 200 || result.up.status >= 300) {
+      throw new ProviderError(
+        'Could not update inbound workflow in Dograh',
+        upstreamStatus(result.up.status),
+        'upstream',
+        upstreamMessage(result.data, 'Dograh inbound workflow update failed.')
+      );
     }
     return { status: result.up.status, data: result.data };
   },
