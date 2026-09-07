@@ -33,8 +33,23 @@ CREATE TABLE IF NOT EXISTS agents (
   greeting TEXT,
   telephony JSONB DEFAULT '{}',
   preset_id TEXT,
+  dograh_workflow_id INTEGER,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS tenant_call_routing (
+  id TEXT PRIMARY KEY,
+  tenant_id TEXT NOT NULL REFERENCES tenants(id) ON DELETE CASCADE,
+  phone_number TEXT NOT NULL DEFAULT '+918065354620',
+  inbound_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+  outbound_agent_id TEXT REFERENCES agents(id) ON DELETE SET NULL,
+  dograh_inbound_workflow_id INTEGER,
+  dograh_outbound_workflow_id INTEGER,
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT uq_tenant_routing_phone UNIQUE (tenant_id, phone_number)
+);
+
+CREATE INDEX IF NOT EXISTS idx_tenant_call_routing_tenant ON tenant_call_routing(tenant_id);
 
 CREATE TABLE IF NOT EXISTS calls (
   id TEXT PRIMARY KEY,

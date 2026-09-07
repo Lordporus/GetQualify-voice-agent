@@ -40,6 +40,7 @@ const State = {
   providers: null,
   usage: null,
   telephony: null,
+  routing: null,
   wallet: null,
   presets: [],
   tickets: [],
@@ -49,7 +50,7 @@ const State = {
   integrations: [],
   agencyPrompt: null,
   activeAgentId: null, // for Talk-to-it
-  loaded: { agents: false, providers: false, usage: false, telephony: false, wallet: false, presets: false, tickets: false, demoLinks: false, agency: false, invoices: false, integrations: false, agencyPrompt: false }
+  loaded: { agents: false, providers: false, usage: false, telephony: false, routing: false, wallet: false, presets: false, tickets: false, demoLinks: false, agency: false, invoices: false, integrations: false, agencyPrompt: false }
 };
 
 const VOICE_MODELS = ['mulberry', 'muga'];
@@ -483,11 +484,11 @@ function renderAuth() {
   draw();
 }
 function resetData() {
-  State.agents = []; State.providers = null; State.usage = null; State.telephony = null;
+  State.agents = []; State.providers = null; State.usage = null; State.telephony = null; State.routing = null;
   State.wallet = null; State.presets = []; State.tickets = [];
   State.demoLinks = [];
   State.agency = null; State.invoices = []; State.integrations = []; State.agencyPrompt = null;
-  State.loaded = { agents: false, providers: false, usage: false, telephony: false, wallet: false, presets: false, tickets: false, demoLinks: false, agency: false, invoices: false, integrations: false, agencyPrompt: false };
+  State.loaded = { agents: false, providers: false, usage: false, telephony: false, routing: false, wallet: false, presets: false, tickets: false, demoLinks: false, agency: false, invoices: false, integrations: false, agencyPrompt: false };
   State.activeAgentId = null;
 }
 
@@ -918,6 +919,14 @@ async function ensureTelephony(force) {
   State.telephony = res;
   State.loaded.telephony = true;
   return State.telephony;
+}
+
+async function ensureRouting(force) {
+  if (State.loaded.routing && !force) return State.routing;
+  const res = await api('/api/routing');
+  State.routing = res;
+  State.loaded.routing = true;
+  return State.routing;
 }
 
 /* ===========================================================================
@@ -2407,8 +2416,10 @@ async function viewTelephony(root) {
   root.appendChild(viewHead('Telephony', 'Your VoBiz numbers and call routing, connected through Dograh. Outbound calls require an explicit confirmation.'));
 
   const statusHost = el('div', { class: 'card card-pad', id: 'telStatus' }, skeleton('sk-line', 5));
+  const routingHost = routingCard();
   const dialHost = el('div', { class: 'card card-pad' }, dialForm());
-  root.appendChild(el('div', { class: 'tel-grid' }, [statusHost, dialHost]));
+  const rightCol = el('div', { class: 'tel-right-col', style: 'display:flex;flex-direction:column;gap:18px' }, [routingHost, dialHost]);
+  root.appendChild(el('div', { class: 'tel-grid' }, [statusHost, rightCol]));
 
   try {
     const s = await ensureTelephony(true);
@@ -2418,6 +2429,164 @@ async function viewTelephony(root) {
     statusHost.innerHTML = '';
     statusHost.appendChild(el('div', { class: 'muted' }, 'Could not reach VoBiz through Dograh. ' + esc(e.message)));
   }
+}
+
+function routingCard() {
+  const card = el('div', { class: 'card card-pad', id: 'telRouting' }, skeleton('sk-line', 5));
+  renderRoutingContent(card);
+  return card;
+}
+
+async function renderRoutingContent(host) {
+  try {
+    const data = await ensureRouting(true);
+    paintRouting(host, data);
+  } catch (e) {
+    host.innerHTML = '';
+    host.appendChild(el('div', { class: 'muted' }, 'Could not load call routing configuration. ' + esc(e.message)));
+  }
+}
+
+function paintRouting(host, data) {
+  host.innerHTML = '';
+  const routing = (data && data.routing) || {};
+  const availableAgents = Array.isArray(data && data.availableAgents) ? data.availableAgents : [];
+  const phoneNumber = routing.phoneNumber || '+918065354620';
+
+  const head = el('div', { style: 'margin-bottom:14px' }, [
+    el('h3', { class: 't-h3' }, 'Call Routing'),
+    el('p', { class: 'muted', style: 'font-size:.85rem;margin-top:2px' }, 'Manage which AI agent represents your organization on inbound and outbound calls.')
+  ]);
+
+  if (availableAgents.length === 0) {
+    host.appendChild(head);
+    host.appendChild(el('div', { class: 'muted' }, 'No agents configured. Create an agent first in the Agents tab.'));
+    return;
+  }
+
+  // Inbound agent dropdown
+  const inSel = el('select', { class: 'select', id: 'routing_inbound_agent' },
+    availableAgents.map((a) => {
+      const tag = a.telephonyReady ? ` (Workflow #${a.dograhWorkflowId})` : ' (Web-only, no phone workflow)';
+      const label = (a.name || 'Agent') + tag;
+      const isSel = a.id === routing.inboundAgentId;
+      return el('option', { value: a.id, selected: isSel ? 'selected' : false }, label);
+    })
+  );
+  if (routing.inboundAgentId) inSel.value = routing.inboundAgentId;
+
+  const inStatus = el('div', { class: 'muted', style: 'font-size:.8rem;margin-top:6px' });
+  const inField = el('div', { class: 'field' }, [
+    el('label', { for: 'routing_inbound_agent' }, `Inbound Agent (Answers calls to ${phoneNumber})`),
+    inSel,
+    inStatus
+  ]);
+
+  // Outbound agent dropdown
+  const outSel = el('select', { class: 'select', id: 'routing_outbound_agent' },
+    availableAgents.map((a) => {
+      const tag = a.telephonyReady ? ` (Workflow #${a.dograhWorkflowId})` : ' (Web-only, no phone workflow)';
+      const label = (a.name || 'Agent') + tag;
+      const isSel = a.id === routing.outboundAgentId;
+      return el('option', { value: a.id, selected: isSel ? 'selected' : false }, label);
+    })
+  );
+  if (routing.outboundAgentId) outSel.value = routing.outboundAgentId;
+
+  const outStatus = el('div', { class: 'muted', style: 'font-size:.8rem;margin-top:6px' });
+  const outField = el('div', { class: 'field', style: 'margin-top:12px' }, [
+    el('label', { for: 'routing_outbound_agent' }, 'Outbound Agent (Speaks when placing calls)'),
+    outSel,
+    outStatus
+  ]);
+
+  const warnBox = el('div', { class: 'danger-note', style: 'margin-top:10px;display:none' });
+  const saveBtn = el('button', { class: 'btn btn-primary', style: 'margin-top:12px;width:100%' }, 'Save Routing Changes');
+
+  function updateValidation() {
+    const inAgent = availableAgents.find((a) => a.id === inSel.value);
+    const outAgent = availableAgents.find((a) => a.id === outSel.value);
+
+    if (inAgent) {
+      if (inAgent.telephonyReady) {
+        inStatus.innerHTML = `🟢 <span style="color:var(--ink)">Live Inbound:</span> ${esc(inAgent.name)} is active on ${esc(phoneNumber)}`;
+      } else {
+        inStatus.innerHTML = `⚠️ <span style="color:var(--warn, #f59e0b)">Not telephony ready:</span> ${esc(inAgent.name)} does not have a linked phone workflow`;
+      }
+    }
+
+    if (outAgent) {
+      if (outAgent.telephonyReady) {
+        outStatus.innerHTML = `🟢 <span style="color:var(--ink)">Outbound Ready:</span> Places calls as ${esc(outAgent.name)} (Workflow #${esc(outAgent.dograhWorkflowId)})`;
+      } else {
+        outStatus.innerHTML = `⚠️ <span style="color:var(--warn, #f59e0b)">Not telephony ready:</span> ${esc(outAgent.name)} does not have a linked phone workflow`;
+      }
+    }
+
+    const inOk = inAgent && inAgent.telephonyReady;
+    const outOk = outAgent && outAgent.telephonyReady;
+
+    if (!inOk || !outOk) {
+      saveBtn.disabled = true;
+      warnBox.style.display = 'block';
+      const unmapped = [];
+      if (!inOk && inAgent) unmapped.push(`Inbound (${inAgent.name})`);
+      if (!outOk && outAgent) unmapped.push(`Outbound (${outAgent.name})`);
+      warnBox.innerHTML = `<b>Cannot save routing:</b> ${esc(unmapped.join(' and '))} is web-only and not linked to a telephony workflow. Please select a telephony-ready agent (e.g. Payal).`;
+    } else {
+      saveBtn.disabled = false;
+      warnBox.style.display = 'none';
+      warnBox.innerHTML = '';
+    }
+  }
+
+  inSel.addEventListener('change', updateValidation);
+  outSel.addEventListener('change', updateValidation);
+  updateValidation();
+
+  saveBtn.addEventListener('click', async (e) => {
+    e.preventDefault();
+    const inAgent = availableAgents.find((a) => a.id === inSel.value);
+    const outAgent = availableAgents.find((a) => a.id === outSel.value);
+    if (!inAgent || !inAgent.telephonyReady || !outAgent || !outAgent.telephonyReady) return;
+
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Saving...';
+    try {
+      await api('/api/routing/update', {
+        method: 'POST',
+        body: {
+          inboundAgentId: inSel.value,
+          outboundAgentId: outSel.value,
+          phoneNumber,
+        }
+      });
+      const inName = inAgent.name.split(' - ')[0] || inAgent.name;
+      toast(`Call routing updated. Incoming calls now route to ${inName}.`, 'ok');
+      State.loaded.routing = false;
+      try {
+        const s = await ensureTelephony(true);
+        const statusHost = $('#telStatus');
+        if (statusHost) paintTelephony(statusHost, s);
+      } catch (_) {}
+    } catch (err) {
+      toast(err.message || 'Failed to update call routing.', 'err');
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save Routing Changes';
+      updateValidation();
+    }
+  });
+
+  const form = el('form', { class: 'routing-form', onsubmit: (e) => e.preventDefault() }, [
+    head,
+    inField,
+    outField,
+    warnBox,
+    saveBtn
+  ]);
+
+  host.appendChild(form);
 }
 
 function paintTelephony(host, s) {

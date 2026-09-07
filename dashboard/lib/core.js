@@ -101,10 +101,41 @@ function readBody(req, cap = 64 * 1024) {
   });
 }
 
+function parseHttpHost(host) {
+  if (typeof host === 'string' && host.includes(':')) {
+    const [hostname, port] = host.split(':');
+    return { hostname, port: Number(port) };
+  }
+  return { host };
+}
+
 // Generic HTTPS POST. Resolves { status, headers, buffer }. Times out at 60s.
 function httpsPost(host, pathname, headers, bodyBuf) {
   return new Promise((resolve, reject) => {
-    const r = https.request({ host, path: pathname, method: 'POST', headers }, (resp) => {
+    const h = parseHttpHost(host);
+    const client = process.env.DOGRAH_ALLOW_HTTP === 'true' ? http : https;
+    const r = client.request({ ...h, path: pathname, method: 'POST', headers }, (resp) => {
+      const parts = [];
+      resp.on('data', (d) => parts.push(d));
+      resp.on('end', () => resolve({
+        status: resp.statusCode,
+        headers: resp.headers,
+        buffer: Buffer.concat(parts),
+      }));
+    });
+    r.on('error', reject);
+    r.setTimeout(60000, () => r.destroy(new Error('upstream timeout')));
+    if (bodyBuf) r.write(bodyBuf);
+    r.end();
+  });
+}
+
+// Generic HTTPS PUT. Resolves { status, headers, buffer }. Times out at 60s.
+function httpsPut(host, pathname, headers, bodyBuf) {
+  return new Promise((resolve, reject) => {
+    const h = parseHttpHost(host);
+    const client = process.env.DOGRAH_ALLOW_HTTP === 'true' ? http : https;
+    const r = client.request({ ...h, path: pathname, method: 'PUT', headers }, (resp) => {
       const parts = [];
       resp.on('data', (d) => parts.push(d));
       resp.on('end', () => resolve({
@@ -123,7 +154,9 @@ function httpsPost(host, pathname, headers, bodyBuf) {
 // Generic HTTPS GET. Resolves { status, headers, buffer }. Times out at 20s.
 function httpsGet(host, pathname, headers) {
   return new Promise((resolve, reject) => {
-    const r = https.request({ host, path: pathname, method: 'GET', headers }, (resp) => {
+    const h = parseHttpHost(host);
+    const client = process.env.DOGRAH_ALLOW_HTTP === 'true' ? http : https;
+    const r = client.request({ ...h, path: pathname, method: 'GET', headers }, (resp) => {
       const parts = [];
       resp.on('data', (d) => parts.push(d));
       resp.on('end', () => resolve({
@@ -174,7 +207,7 @@ function defaultDb() {
     hvacJobs: [], hvacSettings: [], paymentEvents: [], demoLinks: [],
     invoices: [], invoiceEvents: [], integrationRequests: [], agencyPrompts: [],
     clientActivities: [], tenantStatusEvents: [], leads: [], clientSettings: [],
-    calls: [], notifications: [], callRecordings: [],
+    calls: [], notifications: [], callRecordings: [], tenantCallRouting: [],
   };
 }
 
@@ -184,7 +217,7 @@ const COLLECTIONS = [
   'presets', 'byonConnections', 'hvacJobs', 'hvacSettings', 'paymentEvents', 'demoLinks',
   'invoices', 'invoiceEvents', 'integrationRequests', 'agencyPrompts',
   'clientActivities', 'tenantStatusEvents', 'leads', 'clientSettings',
-  'calls', 'notifications', 'callRecordings',
+  'calls', 'notifications', 'callRecordings', 'tenantCallRouting',
 ];
 
 function migrateDb(parsed) {
@@ -636,7 +669,7 @@ function genId(prefix) {
 module.exports = {
   ROOT, DATA_DIR, DB_FILE, PUBLIC_DIR,
   loadEnv,
-  send, sendJson, readBody, httpsPost, httpsGet,
+  send, sendJson, readBody, httpsPost, httpsPut, httpsGet,
   htmlEscape,
   db, mutate, loadDb, defaultDb, migrateDb,
   hashPassword, verifyPassword,
