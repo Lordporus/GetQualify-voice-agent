@@ -121,6 +121,10 @@ const ttsRumik = {
       if (Number.isFinite(opts.f0_up_key)) {
         payload.f0_up_key = Math.max(-12, Math.min(12, opts.f0_up_key | 0));
       }
+    } else if (model === 'muga') {
+      if (opts.tone && opts.tone !== 'neutral' && !payload.text.startsWith('[')) {
+        payload.text = `[${opts.tone}] ${payload.text}`;
+      }
     }
     for (const k of ['temperature', 'top_p', 'top_k', 'repetition_penalty', 'max_new_tokens']) {
       if (Number.isFinite(opts[k])) payload[k] = opts[k];

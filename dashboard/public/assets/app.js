@@ -956,13 +956,17 @@ function dids() {
   const list = t.dids || (t.did ? [{ number: t.did }] : []);
   return list.map((d) => (typeof d === 'string' ? d : d.number || d.did)).filter(Boolean);
 }
-function refillDidOptions() {
-  const sel = $('#f_did'); if (!sel) return;
-  const cur = sel.value;
-  sel.innerHTML = '';
-  sel.appendChild(el('option', { value: '' }, 'No number assigned'));
-  dids().forEach((n) => sel.appendChild(el('option', { value: n }, n)));
-  if (cur) sel.value = cur;
+function refillDidOptions(scope) {
+  const sels = scope ? $$('#f_did, #f_did_modal', scope) : $$('#f_did, #f_did_modal');
+  if (!sels.length) return;
+  const numbers = dids();
+  sels.forEach((sel) => {
+    const cur = sel.value;
+    sel.innerHTML = '';
+    sel.appendChild(el('option', { value: '' }, 'No number assigned'));
+    numbers.forEach((n) => sel.appendChild(el('option', { value: n }, n)));
+    if (cur) sel.value = cur;
+  });
 }
 
 function buildAgentForm(existing) {
@@ -972,6 +976,7 @@ function buildAgentForm(existing) {
   const state = {
     model: tts.model || 'mulberry',
     speaker: tts.speaker || 'speaker_2',
+    tone: tts.tone || 'neutral',
     f0: tts.f0_up_key != null ? tts.f0_up_key : 0
   };
 
@@ -980,26 +985,52 @@ function buildAgentForm(existing) {
   const greetI = el('input', { class: 'input', id: 'f_greeting', type: 'text', value: e.greeting || '', placeholder: 'Hi, thanks for calling GetQualify. How can I help today.', maxlength: 240 });
   const descI = el('input', { class: 'input', id: 'f_desc', type: 'text', value: (tts.description || ''), placeholder: 'Optional voice direction, e.g. calm and confident' });
 
-  const modelSeg = el('div', { class: 'seg', id: 'f_model_seg' }, VOICE_MODELS.map((m) =>
-    el('button', { type: 'button', class: m === state.model ? 'on' : '', 'data-m': m, onclick: () => { state.model = m; syncVoice(); } }, m)
+  const modelSegId = existing ? 'f_model_seg_modal' : 'f_model_seg';
+  const modelSeg = el('div', { class: 'seg', id: modelSegId }, VOICE_MODELS.map((m) =>
+    el('button', { type: 'button', class: m === state.model ? 'on' : '', 'data-m': m, onclick: () => {
+      state.model = m;
+      syncVoice();
+    } }, m)
   ));
-  const speakerSel = el('select', { class: 'select', id: 'f_speaker' }, SPEAKERS.map((s) =>
+  const speakerSel = el('select', { class: 'select', id: existing ? 'f_speaker_modal' : 'f_speaker' }, SPEAKERS.map((s) =>
     el('option', { value: s, selected: s === state.speaker ? 'selected' : false }, s)
   ));
+  speakerSel.addEventListener('change', () => { state.speaker = speakerSel.value; });
+
+  const toneSegId = existing ? 'f_tone_seg_modal' : 'f_tone_seg';
+  const toneSeg = el('div', { class: 'seg', id: toneSegId }, MUGA_TONES.map((tn) =>
+    el('button', {
+      type: 'button',
+      class: tn === state.tone ? 'on' : '',
+      'data-t': tn,
+      onclick: () => {
+        state.tone = tn;
+        $$('#' + toneSegId + ' button', card).forEach((b) => b.classList.toggle('on', b.getAttribute('data-t') === tn));
+      }
+    }, tn)
+  ));
+
   const f0Val = el('span', { class: 'rv', id: 'f_f0_val' }, String(state.f0));
   const f0Range = el('input', { type: 'range', id: 'f_f0', min: -12, max: 12, step: 1, value: state.f0, oninput: (ev) => { state.f0 = +ev.target.value; f0Val.textContent = (state.f0 > 0 ? '+' : '') + state.f0; } });
   if (state.f0 > 0) f0Val.textContent = '+' + state.f0;
 
-  const didSel = el('select', { class: 'select', id: 'f_did' }, [el('option', { value: '' }, 'No number assigned')]);
-  if (e.telephony && e.telephony.did) { /* set after dids load */ setTimeout(() => { try { didSel.value = e.telephony.did; } catch (x) {} }, 0); }
+  const didOptions = [el('option', { value: '' }, 'No number assigned')].concat(
+    dids().map((n) => el('option', { value: n, selected: (e.telephony && e.telephony.did === n) ? 'selected' : false }, n))
+  );
+  const didSel = el('select', { class: 'select', id: existing ? 'f_did_modal' : 'f_did' }, didOptions);
+  if (e.telephony && e.telephony.did) { didSel.value = e.telephony.did; }
 
   const speakerField = field('Speaker', speakerSel);
+  const toneField = field('Tone (muga mood)', toneSeg);
+  const pitchField = field('Pitch, f0_up_key', el('div', { class: 'range-row' }, [f0Range, f0Val]));
   const descField = field('Voice direction (mulberry)', descI);
   function syncVoice() {
-    $$('#f_model_seg button').forEach((b) => b.classList.toggle('on', b.getAttribute('data-m') === state.model));
+    $$('#' + modelSegId + ' button', card).forEach((b) => b.classList.toggle('on', b.getAttribute('data-m') === state.model));
     const isMul = state.model === 'mulberry';
     speakerField.style.display = isMul ? '' : 'none';
     descField.style.display = isMul ? '' : 'none';
+    pitchField.style.display = isMul ? '' : 'none';
+    toneField.style.display = isMul ? 'none' : '';
   }
 
   const submitBtn = el('button', { class: 'btn btn-primary' }, existing ? 'Save changes' : 'Create agent');
@@ -1010,8 +1041,9 @@ function buildAgentForm(existing) {
       (function () { const f = field('Persona', personaI); f.classList.add('full'); return f; })(),
       (function () { const f = field('Greeting', greetI); f.classList.add('full'); return f; })(),
       field('Voice model', modelSeg),
-      field('Pitch, f0_up_key', el('div', { class: 'range-row' }, [f0Range, f0Val])),
+      pitchField,
       speakerField,
+      toneField,
       descField
     ]),
     el('div', { class: 'flex gap-2', style: 'margin-top:18px;align-items:center' }, [submitBtn, existing ? el('button', { type: 'button', class: 'btn btn-ghost', onclick: () => modalClose() }, 'Cancel') : null])
@@ -1082,7 +1114,13 @@ function buildAgentForm(existing) {
       persona: persona,
       greeting: greetI.value.trim(),
       did: didSel.value || '',
-      tts: { model: state.model, speaker: state.speaker, f0_up_key: state.f0, description: descI.value.trim() }
+      tts: {
+        model: state.model,
+        speaker: state.model === 'mulberry' ? state.speaker : undefined,
+        tone: state.model === 'muga' ? state.tone : undefined,
+        f0_up_key: state.model === 'mulberry' ? state.f0 : 0,
+        description: state.model === 'mulberry' ? descI.value.trim() : ''
+      }
     };
     try {
       if (existing) {
@@ -1211,7 +1249,12 @@ function paintAgents() {
 
 function agentCard(a) {
   const tts = a.tts || {};
-  const voiceLine = (tts.model || 'mulberry') + ' / ' + (tts.speaker || 'speaker') + (tts.f0_up_key ? ' / pitch ' + (tts.f0_up_key > 0 ? '+' : '') + tts.f0_up_key : '');
+  let voiceLine = '';
+  if (tts.model === 'muga') {
+    voiceLine = 'muga / ' + (tts.tone || 'neutral');
+  } else {
+    voiceLine = (tts.model || 'mulberry') + ' / ' + (tts.speaker || 'speaker_2') + (tts.f0_up_key ? ' / pitch ' + (tts.f0_up_key > 0 ? '+' : '') + tts.f0_up_key : '');
+  }
   const did = a.telephony && a.telephony.did ? a.telephony.did : null;
 
   const previewBtn = el('button', { class: 'btn btn-ghost btn-sm' }, 'Preview voice');
@@ -1241,11 +1284,19 @@ function agentCard(a) {
 
 async function previewAgentVoice(a, btn) {
   const tts = a.tts || {};
-  const text = (a.greeting && a.greeting.trim()) || ('Hi, this is ' + (a.name || 'your agent') + '. How can I help today.');
+  let text = (a.greeting && a.greeting.trim()) || ('Hi, this is ' + (a.name || 'your agent') + '. How can I help today.');
+  if (tts.model === 'muga' && tts.tone && tts.tone !== 'neutral') {
+    text = '[' + tts.tone + '] ' + text;
+  }
   const old = btn.textContent;
   btn.disabled = true; btn.textContent = 'Synthesizing...';
   try {
-    const body = { text: text, model: tts.model || 'mulberry', speaker: tts.speaker, f0_up_key: tts.f0_up_key, description: tts.description };
+    const body = { text: text, model: tts.model || 'mulberry' };
+    if (tts.model === 'mulberry') {
+      body.speaker = tts.speaker || 'speaker_2';
+      body.f0_up_key = tts.f0_up_key || 0;
+      if (tts.description) body.description = tts.description;
+    }
     const res = await api('/api/tts', { method: 'POST', body: body });
     const buf = await res.arrayBuffer();
     const url = URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
@@ -1272,7 +1323,13 @@ function openEditAgent(a) {
   host.appendChild(card);
   host.classList.remove('hide');
   host.setAttribute('aria-hidden', 'false');
-  setTimeout(refillDidOptions, 0);
+  setTimeout(() => {
+    refillDidOptions(card);
+    if (a.telephony && a.telephony.did) {
+      const s = $('#f_did_modal', card) || $('#f_did', card);
+      if (s) s.value = a.telephony.did;
+    }
+  }, 0);
 }
 
 function confirmDeleteAgent(a) {
@@ -2723,36 +2780,54 @@ async function viewPresets(root) {
 
     filtered.forEach((p) => {
       const isPayal = p.slug?.includes('payal') || (p.category && p.category.includes('_india'));
-      const privacy = p.recommendedPrivacyMode || p.privacyMode || 'standard';
 
-      let icon = (p.name || '?').slice(0, 1);
-      if (p.slug?.includes('salon')) icon = '💇';
-      else if (p.slug?.includes('clinic')) icon = '🩺';
-      else if (p.slug?.includes('hvac')) icon = '❄️';
+      // Semantic icon mapping for ALL preset verticals
+      let icon = '🤖';
+      const slug = (p.slug || '').toLowerCase();
+      const cat = (p.category || '').toLowerCase();
+      if (slug.includes('salon')) icon = '💇';
+      else if (slug.includes('clinic')) icon = '🩺';
+      else if (slug.includes('hvac')) icon = '❄️';
+      else if (slug.includes('dental')) icon = '🦷';
+      else if (slug.includes('personal-injury') || cat.includes('legal')) icon = '⚖️';
       else if (p.slug?.includes('realtor') || p.slug?.includes('real-estate')) icon = '🏢';
       else if (p.slug?.includes('restaurant')) icon = '🍽️';
-      else if (isPayal) icon = '🇮🇳';
+      else if (slug.includes('appointment') || cat.includes('scheduling')) icon = '📅';
+      else if (slug.includes('support')) icon = '🎧';
+      else if (slug.includes('lead') || cat.includes('sales')) icon = '🎯';
+      else if (slug.includes('reception')) icon = '🛎️';
+
+      // Human-readable category names
+      const categoryLabels = {
+        salon_india: 'Salon & Spa', clinic_india: 'Clinic & Health', hvac_india: 'HVAC Services',
+        realtor_india: 'Real Estate', restaurant_india: 'Restaurant', legal: 'Legal Intake',
+        healthcare: 'Healthcare', real_estate: 'Real Estate', hospitality: 'Hospitality',
+        scheduling: 'Scheduling', support: 'Customer Support', sales: 'Lead Qualification',
+        reception: 'Front Desk'
+      };
+      const displayCategory = categoryLabels[cat] || (p.category || 'Voice agent').replace(/_/g, ' ');
 
       const card = el('article', {
-        class: 'card preset-card' + (isPayal ? ' preset-card-india' : ''),
-        style: isPayal ? 'border:1px solid rgba(234,179,8,0.4);background:linear-gradient(180deg, rgba(234,179,8,0.03) 0%, transparent 100%)' : ''
+        class: 'card preset-card' + (isPayal ? ' preset-card-india' : '')
       }, [
         el('div', { class: 'flex items-center justify-between gap-2' }, [
-          el('div', { class: 'preset-icon', style: 'font-size:22px' }, icon),
+          el('div', { class: 'preset-icon' }, icon),
           isPayal
-            ? el('span', { class: 'badge-ready', style: 'background:rgba(234,179,8,0.15);color:#ca8a04;font-weight:600;border:1px solid rgba(234,179,8,0.3)' }, '⭐ Recommended for India')
-            : el('span', { class: 'badge-ready' }, privacy.replace(/_/g, ' '))
+            ? el('span', { class: 'badge-ready badge-india' }, [el('span', { class: 'd' }), '⭐ Recommended for India'])
+            : el('span', { class: 'badge-ready badge-global' }, [el('span', { class: 'd' }), '🌐 Global English'])
         ]),
         el('div', { class: 'flex items-center justify-between gap-2', style: 'margin-top:10px' }, [
           el('h3', { class: 't-h3' }, p.name)
         ]),
         el('p', { class: 'muted', style: 'font-size:13px;margin:8px 0 12px' }, p.greeting || p.description || 'Editable voice-agent starting point.'),
-        el('div', { class: 'preset-meta', style: 'display:flex;gap:6px;flex-wrap:wrap;margin-bottom:14px' }, [
-          el('span', { style: 'font-size:11px' }, p.category || 'Voice agent'),
-          isPayal ? el('span', { style: 'font-size:11px;background:rgba(59,130,246,0.1);color:#3b82f6' }, '🇮🇳 Hindi / Hinglish / English') : null,
-          isPayal ? el('span', { style: 'font-size:11px;background:rgba(16,185,129,0.1);color:#10b981' }, 'Deepgram Aura-2') : null,
-          el('span', { style: 'font-size:11px' }, 'BYON ready')
-        ].filter(Boolean)),
+        el('div', { class: 'preset-meta' }, [
+          el('span', { class: 'tag-cat' }, displayCategory),
+          isPayal
+            ? el('span', { class: 'tag-lang-in' }, '🇮🇳 Hindi / Hinglish')
+            : el('span', { class: 'tag-lang-en' }, '🌐 English (US/UK)'),
+          el('span', { class: 'tag-engine' }, isPayal ? 'Aura-2 Helena' : 'Mulberry TTS'),
+          el('span', { class: 'tag-feature' }, 'BYON ready')
+        ]),
         el('button', { class: 'btn btn-primary', onclick: () => createFromPreset(p) }, 'Use this preset')
       ]);
       host.appendChild(card);

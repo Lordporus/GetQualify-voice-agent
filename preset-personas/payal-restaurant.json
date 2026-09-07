@@ -23,9 +23,11 @@
     "Confirm indoor vs outdoor/terrace seating preference"
   ],
   "tts": {
-    "provider": "deepgram",
-    "voice": "aura-2-helena-en",
-    "_todo": "switch to rumik once overlay is built"
+    "provider": "rumik",
+    "model": "mulberry",
+    "speaker": "speaker_2",
+    "f0_up_key": 0,
+    "description": "Cheerful and polite table reservations host"
   },
   "stt": {
     "provider": "deepgram",

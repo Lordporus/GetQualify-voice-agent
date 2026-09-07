@@ -288,6 +288,7 @@ CREATE TABLE IF NOT EXISTS presets (
   persona     TEXT,
   fields      JSONB DEFAULT '[]',
   guardrails  JSONB DEFAULT '[]',
+  tts         JSONB DEFAULT '{"model":"mulberry","speaker":"speaker_2","f0_up_key":0}',
   created_at  TIMESTAMPTZ DEFAULT NOW()
 );
 CREATE INDEX IF NOT EXISTS idx_presets_tenant ON presets(tenant_id);

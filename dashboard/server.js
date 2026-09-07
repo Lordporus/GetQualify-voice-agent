@@ -103,7 +103,7 @@ function readForm(req, cap = 64 * 1024) {
 }
 
 const PRESET_LIBRARY = [
-  // ============ PAYAL PRESETS (Indian Market — Phase 1 Deepgram Interim) ============
+  // ============ PAYAL PRESETS (Indian Market — Tested Mulberry + speaker_2 Default) ============
   {
     id: 'preset_payal_salon_v1',
     slug: 'payal-salon-receptionist',
@@ -112,8 +112,10 @@ const PRESET_LIBRARY = [
     category: 'salon_india',
     isSystem: true,
     tts: {
-      provider: 'deepgram',
-      voice: 'aura-2-helena-en', // TODO: switch to rumik once overlay is built
+      model: 'mulberry',
+      speaker: 'speaker_2',
+      f0_up_key: 0,
+      description: 'Warm, friendly Indian salon receptionist',
     },
     greeting: 'Hi! Payal bol rahi hoon [your salon name] se. Aaj kya treatment lena hai?',
     persona: `You are Payal, the AI receptionist for [salon name]. You are on a live phone call in India.
@@ -151,8 +153,10 @@ STAGE 3 (End): Close warmly in 6-10 words. Example: "Dhanyawaad! Dekhte hain Tue
     category: 'clinic_india',
     isSystem: true,
     tts: {
-      provider: 'deepgram',
-      voice: 'aura-2-helena-en', // TODO: switch to rumik once overlay is built
+      model: 'mulberry',
+      speaker: 'speaker_2',
+      f0_up_key: 0,
+      description: 'Polite, empathetic clinic receptionist',
     },
     greeting: 'Namaste! Payal speaking from [doctor name] clinic. Kya appointment chahiye?',
     persona: `You are Payal, clinic receptionist for Dr. [Name]. You are on a live phone call in India.
@@ -191,8 +195,10 @@ STAGE 3: Confirm appointment time twice. Example: "Doctor ko Friday 10am pe mile
     category: 'hvac_india',
     isSystem: true,
     tts: {
-      provider: 'deepgram',
-      voice: 'aura-2-helena-en', // TODO: switch to rumik once overlay is built
+      model: 'mulberry',
+      speaker: 'speaker_2',
+      f0_up_key: 0,
+      description: 'Alert and helpful HVAC service receptionist',
     },
     greeting: 'Hello! Payal here from [company] AC services. Kya problem aa rahi hai AC mein — cooling nahi ho rahi ya service karwani hai?',
     persona: `You are Payal, service receptionist for HVAC & AC company. You are on a live phone call in India.
@@ -231,8 +237,10 @@ STAGE 3: Confirm service timing. "Technician ko 2 ghante mein bhejenge. Address 
     category: 'realtor_india',
     isSystem: true,
     tts: {
-      provider: 'deepgram',
-      voice: 'aura-2-helena-en', // TODO: switch to rumik once overlay is built
+      model: 'mulberry',
+      speaker: 'speaker_2',
+      f0_up_key: 0,
+      description: 'Courteous real estate inquiry receptionist',
     },
     greeting: 'Hello! Payal bol rahi hoon [agency name] se. Aap property buy, sell ya rent karne ke liye call kar rahe hain?',
     persona: `You are Payal, real estate inquiry receptionist. You are on a live phone call in India.
@@ -272,8 +280,10 @@ STAGE 3: Offer site visit scheduling or WhatsApp brochure dispatch. Example: "Ma
     category: 'restaurant_india',
     isSystem: true,
     tts: {
-      provider: 'deepgram',
-      voice: 'aura-2-helena-en', // TODO: switch to rumik once overlay is built
+      model: 'mulberry',
+      speaker: 'speaker_2',
+      f0_up_key: 0,
+      description: 'Cheerful and polite table reservations host',
     },
     greeting: 'Namaste! Payal speaking from [restaurant name]. Table reservation karni hai ya timings janne hain?',
     persona: `You are Payal, restaurant table reservation receptionist. You are on a live phone call in India.
@@ -306,6 +316,7 @@ STAGE 3: Confirm reservation details clearly. Example: "Friday raat 8 baje 4 log
   {
     id: 'preset_personal_injury_v1', slug: 'personal-injury-intake', version: 1,
     name: 'Personal Injury Intake', category: 'legal', isSystem: true,
+    tts: { model: 'mulberry', speaker: 'speaker_2', f0_up_key: 0, description: 'Calm, clear intake specialist' },
     greeting: 'Thank you for calling. I am an AI intake assistant and this call may be recorded. Are you in immediate danger or need emergency medical help?',
     fields: ['caller_name', 'callback_number', 'adverse_parties', 'incident_date', 'incident_location', 'incident_type', 'injuries', 'treatment', 'insurance', 'represented', 'deadline_risk', 'preferred_appointment'],
     guardrails: ['No legal advice', 'No case valuation', 'Escalate emergencies and deadline risk', 'Attorney decides case acceptance'],
@@ -313,6 +324,7 @@ STAGE 3: Confirm reservation details clearly. Example: "Friday raat 8 baje 4 log
   {
     id: 'preset_dental_receptionist_v1', slug: 'dental-receptionist', version: 1,
     name: 'Dental Receptionist', category: 'healthcare', isSystem: true,
+    tts: { model: 'mulberry', speaker: 'speaker_2', f0_up_key: 0, description: 'Friendly healthcare receptionist' },
     greeting: 'Thank you for calling. I am the practice AI receptionist and this call may be recorded. How can I help today?',
     fields: ['caller_name', 'callback_number', 'new_or_existing_patient', 'reason', 'pain_level', 'emergency_signs', 'insurance', 'preferred_appointment'],
     guardrails: ['No diagnosis', 'Escalate breathing, bleeding, trauma, or severe swelling', 'Confirm booking details'],
@@ -320,6 +332,7 @@ STAGE 3: Confirm reservation details clearly. Example: "Friday raat 8 baje 4 log
   {
     id: 'preset_real_estate_v1', slug: 'real-estate-lead', version: 1,
     name: 'Real Estate Lead Qualifier', category: 'real_estate', isSystem: true,
+    tts: { model: 'mulberry', speaker: 'speaker_2', f0_up_key: 0, description: 'Professional property assistant' },
     greeting: 'Thanks for calling. I am the AI property assistant. Are you looking to buy, sell, rent, or schedule a viewing?',
     fields: ['caller_name', 'callback_number', 'intent', 'location', 'budget', 'timeline', 'financing', 'property_type', 'preferred_appointment'],
     guardrails: ['Do not promise availability or returns', 'Escalate fair housing questions', 'Confirm consent before follow-up'],
@@ -327,6 +340,7 @@ STAGE 3: Confirm reservation details clearly. Example: "Friday raat 8 baje 4 log
   {
     id: 'preset_restaurant_v1', slug: 'restaurant-reservations', version: 1,
     name: 'Restaurant Reservations', category: 'hospitality', isSystem: true,
+    tts: { model: 'mulberry', speaker: 'speaker_2', f0_up_key: 0, description: 'Warm restaurant host' },
     greeting: 'Thank you for calling. I can help with a reservation, opening hours, directions, or a general question.',
     fields: ['caller_name', 'callback_number', 'party_size', 'date', 'time', 'dietary_needs', 'occasion', 'special_requests'],
     guardrails: ['Never confirm unavailable inventory', 'Escalate allergy questions to staff', 'Read back reservation details'],
@@ -334,6 +348,7 @@ STAGE 3: Confirm reservation details clearly. Example: "Friday raat 8 baje 4 log
   {
     id: 'preset_appointment_v1', slug: 'appointment-booking', version: 1,
     name: 'Appointment Booking', category: 'scheduling', isSystem: true,
+    tts: { model: 'mulberry', speaker: 'speaker_2', f0_up_key: 0, description: 'Efficient scheduling assistant' },
     greeting: 'Thanks for calling. I can help you schedule, move, or cancel an appointment.',
     fields: ['caller_name', 'callback_number', 'appointment_type', 'preferred_date', 'preferred_time', 'timezone', 'notes'],
     guardrails: ['Confirm timezone', 'Never invent calendar availability', 'Read back the final appointment'],
@@ -341,6 +356,7 @@ STAGE 3: Confirm reservation details clearly. Example: "Friday raat 8 baje 4 log
   {
     id: 'preset_customer_support_v1', slug: 'customer-support', version: 1,
     name: 'Customer Support', category: 'support', isSystem: true,
+    tts: { model: 'mulberry', speaker: 'speaker_2', f0_up_key: 0, description: 'Helpful support representative' },
     greeting: 'Thanks for contacting support. I am an AI assistant. Tell me what happened and I will help or route you to the right person.',
     fields: ['caller_name', 'callback_number', 'account_reference', 'issue_category', 'issue_summary', 'steps_tried', 'preferred_resolution'],
     guardrails: ['Never request passwords or full payment credentials', 'Escalate security incidents', 'Do not promise refunds'],
@@ -348,6 +364,7 @@ STAGE 3: Confirm reservation details clearly. Example: "Friday raat 8 baje 4 log
   {
     id: 'preset_lead_qualification_v1', slug: 'lead-qualification', version: 1,
     name: 'Lead Qualification', category: 'sales', isSystem: true,
+    tts: { model: 'mulberry', speaker: 'speaker_2', f0_up_key: 0, description: 'Confident sales qualification specialist' },
     greeting: 'Thanks for your interest. I am an AI assistant. I will ask a few quick questions and help you book the right next step.',
     fields: ['caller_name', 'company', 'callback_number', 'email', 'need', 'budget', 'authority', 'timeline', 'preferred_appointment'],
     guardrails: ['Disclose AI identity', 'Do not make unsupported product claims', 'Respect opt-out requests immediately'],
@@ -355,6 +372,7 @@ STAGE 3: Confirm reservation details clearly. Example: "Friday raat 8 baje 4 log
   {
     id: 'preset_receptionist_v1', slug: 'general-receptionist', version: 1,
     name: 'AI Receptionist', category: 'reception', isSystem: true,
+    tts: { model: 'mulberry', speaker: 'speaker_2', f0_up_key: 0, description: 'Professional front desk receptionist' },
     greeting: 'Thank you for calling. I am the AI receptionist. How may I direct your call today?',
     fields: ['caller_name', 'callback_number', 'reason', 'department', 'urgency', 'message', 'preferred_follow_up'],
     guardrails: ['Disclose AI identity', 'Escalate emergencies', 'Do not reveal private staff or customer information'],
@@ -385,7 +403,7 @@ function readLegacyAgents() {
 // (nested tts object, createdAt ISO), scoped to the given tenant.
 function migrateLegacyAgent(legacy, tenantId) {
   const model = legacy.model === 'muga' ? 'muga' : providers.tts.model;
-  const speaker = providers.TTS_SPEAKERS.has(legacy.speaker) ? legacy.speaker : 'speaker_1';
+  const speaker = providers.TTS_SPEAKERS.has(legacy.speaker) ? legacy.speaker : 'speaker_2';
   return {
     id: legacy.id || core.genId('ag_'),
     tenantId,
@@ -396,6 +414,7 @@ function migrateLegacyAgent(legacy, tenantId) {
       model,
       speaker,
       f0_up_key: Number.isFinite(legacy.f0_up_key) ? legacy.f0_up_key : 0,
+      ...(legacy.tone ? { tone: String(legacy.tone).slice(0, 30) } : {}),
     },
     greeting: String(legacy.greeting || '').slice(0, 300),
     telephony: { did: String(legacy.did || providers.telephony.did) },
@@ -408,15 +427,24 @@ async function boot() {
   const existing = core.db();
   await core.mutate((d) => {
     for (const preset of PRESET_LIBRARY) {
-      if (!d.presets.some((p) => p.id === preset.id)) d.presets.push({ ...preset, createdAt: new Date().toISOString() });
+      const idx = d.presets.findIndex((p) => p.id === preset.id);
+      if (idx === -1) {
+        d.presets.push({ ...preset, createdAt: new Date().toISOString() });
+      } else {
+        d.presets[idx] = { ...preset, createdAt: d.presets[idx].createdAt || new Date().toISOString() };
+      }
     }
   });
 
   if (db.isPostgres) {
+    await db.query(`
+      ALTER TABLE presets ADD COLUMN IF NOT EXISTS tts JSONB DEFAULT '{"model":"mulberry","speaker":"speaker_2","f0_up_key":0}';
+    `).catch(() => {});
+
     for (const preset of PRESET_LIBRARY) {
       await db.query(
-        `INSERT INTO presets (id, slug, name, category, version, is_system, greeting, persona, fields, guardrails, created_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW())
+        `INSERT INTO presets (id, slug, name, category, version, is_system, greeting, persona, fields, guardrails, tts, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW())
          ON CONFLICT (id) DO UPDATE SET
            greeting = EXCLUDED.greeting,
            persona = EXCLUDED.persona,
@@ -425,8 +453,21 @@ async function boot() {
            name = EXCLUDED.name,
            category = EXCLUDED.category,
            slug = EXCLUDED.slug,
-           version = EXCLUDED.version`,
-        [preset.id, preset.slug, preset.name, preset.category, preset.version || 1, true, preset.greeting, preset.persona || null, JSON.stringify(preset.fields || []), JSON.stringify(preset.guardrails || [])]
+           version = EXCLUDED.version,
+           tts = EXCLUDED.tts`,
+        [
+          preset.id,
+          preset.slug,
+          preset.name,
+          preset.category,
+          preset.version || 1,
+          true,
+          preset.greeting,
+          preset.persona || null,
+          JSON.stringify(preset.fields || []),
+          JSON.stringify(preset.guardrails || []),
+          JSON.stringify(preset.tts || { model: 'mulberry', speaker: 'speaker_2', f0_up_key: 0 }),
+        ]
       ).catch(() => {});
     }
     await db.query(`
@@ -1749,9 +1790,10 @@ async function apiAgentsCreate(req, res, ctx) {
   const ttsIn = b.tts || (preset && preset.tts) || {};
   const ttsProvider = ttsIn.provider || providers.tts.id;
   const model = ttsIn.model === 'muga' ? 'muga' : providers.tts.model;
-  const speaker = providers.TTS_SPEAKERS.has(ttsIn.speaker) ? ttsIn.speaker : 'speaker_1';
+  const speaker = providers.TTS_SPEAKERS.has(ttsIn.speaker) ? ttsIn.speaker : 'speaker_2';
   const f0 = Number.isFinite(ttsIn.f0_up_key) ? Math.max(-12, Math.min(12, ttsIn.f0_up_key | 0)) : 0;
-  const agentTts = ttsIn.voice ? { provider: ttsProvider, voice: ttsIn.voice } : { provider: ttsProvider, model, speaker, f0_up_key: f0 };
+  const tone = (model === 'muga' && typeof ttsIn.tone === 'string') ? ttsIn.tone.slice(0, 30) : undefined;
+  const agentTts = ttsIn.voice ? { provider: ttsProvider, voice: ttsIn.voice } : { provider: ttsProvider, model, speaker, f0_up_key: f0, ...(tone ? { tone } : {}) };
 
   const rawWf = b.dograhWorkflowId !== undefined ? b.dograhWorkflowId : (preset && (preset.dograhWorkflowId || preset.dograh_workflow_id));
   const dograhWorkflowId = Number.isInteger(Number(rawWf)) && Number(rawWf) > 0 ? Number(rawWf) : null;
@@ -1797,6 +1839,11 @@ async function apiAgentsUpdate(req, res, ctx) {
       if (b.tts.model != null) tts.model = b.tts.model === 'muga' ? 'muga' : providers.tts.model;
       if (providers.TTS_SPEAKERS.has(b.tts.speaker)) tts.speaker = b.tts.speaker;
       if (Number.isFinite(b.tts.f0_up_key)) tts.f0_up_key = Math.max(-12, Math.min(12, b.tts.f0_up_key | 0));
+      if (tts.model === 'muga' && typeof b.tts.tone === 'string') {
+        tts.tone = b.tts.tone.slice(0, 30);
+      } else if (tts.model && tts.model !== 'muga') {
+        delete tts.tone;
+      }
       tts.provider = providers.tts.id;
     }
     
@@ -1839,6 +1886,11 @@ async function apiAgentsUpdate(req, res, ctx) {
         if (b.tts.model != null) t.model = b.tts.model === 'muga' ? 'muga' : providers.tts.model;
         if (providers.TTS_SPEAKERS.has(b.tts.speaker)) t.speaker = b.tts.speaker;
         if (Number.isFinite(b.tts.f0_up_key)) t.f0_up_key = Math.max(-12, Math.min(12, b.tts.f0_up_key | 0));
+        if (t.model === 'muga' && typeof b.tts.tone === 'string') {
+          t.tone = b.tts.tone.slice(0, 30);
+        } else if (t.model && t.model !== 'muga') {
+          delete t.tone;
+        }
         t.provider = providers.tts.id;
         a.tts = t;
       }
@@ -1881,6 +1933,7 @@ async function apiTts(req, res, ctx) {
       speaker: b.speaker,
       f0_up_key: b.f0_up_key,
       description: b.description,
+      tone: b.tone,
     });
     // Count usage only on a real synthesis.
     bumpUsage(ctx.tenant.id, 'chars', out.chars).catch(() => {});
@@ -2776,6 +2829,7 @@ async function apiPresets(req, res, ctx) {
       persona: p.persona,
       fields: p.fields || [],
       guardrails: p.guardrails || [],
+      tts: p.tts || { model: 'mulberry', speaker: 'speaker_2', f0_up_key: 0 },
       createdAt: toIso(p.createdAt || p.created_at),
     }));
     presets.sort((a, b) => {
@@ -2785,7 +2839,12 @@ async function apiPresets(req, res, ctx) {
     });
     return core.sendJson(res, 200, { presets });
   }
-  let presets = core.db().presets.filter((p) => p.isSystem || p.tenantId === ctx.tenant.id);
+  let presets = core.db().presets
+    .filter((p) => p.isSystem || p.tenantId === ctx.tenant.id)
+    .map((p) => ({
+      ...p,
+      tts: p.tts || { model: 'mulberry', speaker: 'speaker_2', f0_up_key: 0 },
+    }));
   presets.sort((a, b) => {
     const aP = a.slug?.includes('payal') ? 0 : (a.slug?.includes('ria') ? 1 : 2);
     const bP = b.slug?.includes('payal') ? 0 : (b.slug?.includes('ria') ? 1 : 2);

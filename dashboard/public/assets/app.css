@@ -534,11 +534,25 @@
    SAAS CONTROL PLANE
    ========================================================= */
 .preset-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(250px,1fr)); gap:14px; }
-.preset-card { padding:18px; display:flex; flex-direction:column; gap:13px; min-height:260px; }
+.preset-card { padding:18px; display:flex; flex-direction:column; gap:13px; min-height:270px; transition:border-color 0.15s ease, transform 0.15s ease; }
+.preset-card:hover { border-color:var(--line-strong, rgba(255,255,255,0.2)); transform:translateY(-2px); }
+.preset-card-india { border-color:rgba(234,179,8,0.3); background:linear-gradient(180deg, rgba(234,179,8,0.03) 0%, transparent 100%); }
+.preset-card-india:hover { border-color:rgba(234,179,8,0.55); }
 .preset-card p { font-size:.84rem; line-height:1.55; flex:1; }
-.preset-icon { width:42px; height:42px; display:grid; place-items:center; border-radius:12px; color:#805815; font-weight:720; font-size:1.1rem; background:rgba(215,180,92,.18); border:1px solid rgba(184,138,45,.3); }
-.preset-meta { display:flex; gap:7px; flex-wrap:wrap; }
-.preset-meta span { font-size:.7rem; color:var(--ink-dim); border:1px solid var(--line); border-radius:var(--r-pill); padding:4px 8px; }
+.preset-icon { width:42px; height:42px; display:grid; place-items:center; border-radius:10px; font-size:1.25rem; background:var(--bg-2); border:1px solid var(--line); }
+.preset-card-india .preset-icon { background:rgba(234,179,8,0.08); border-color:rgba(234,179,8,0.25); }
+.badge-ready.badge-india { background:rgba(234,179,8,0.12); border-color:rgba(234,179,8,0.35); color:#eab308; }
+.badge-ready.badge-india .d { background:#eab308; box-shadow:0 0 6px rgba(234,179,8,0.6); }
+.badge-ready.badge-global { background:rgba(99,102,241,0.1); border-color:rgba(99,102,241,0.28); color:#a5b4fc; }
+.badge-ready.badge-global .d { background:#818cf8; box-shadow:0 0 6px rgba(129,140,248,0.5); }
+.preset-meta { display:flex; gap:6px; flex-wrap:wrap; margin-bottom:6px; }
+.preset-meta span { font-size:0.72rem; font-weight:500; border-radius:var(--r-pill); padding:3px 8px; border:1px solid var(--line); color:var(--ink-dim); background:var(--bg-2); }
+.preset-meta span.tag-lang-in { background:rgba(59,130,246,0.08); color:#60a5fa; border-color:rgba(59,130,246,0.25); }
+.preset-meta span.tag-lang-en { background:rgba(168,85,247,0.08); color:#c084fc; border-color:rgba(168,85,247,0.25); }
+.preset-meta span.tag-engine { background:rgba(16,185,129,0.08); color:#34d399; border-color:rgba(16,185,129,0.25); }
+@media (prefers-reduced-motion: reduce) {
+  .preset-card { transition:none; transform:none !important; }
+}
 .pack-row { display:flex; gap:8px; flex-wrap:wrap; margin-top:18px; }
 .ledger-row { display:flex; align-items:center; justify-content:space-between; gap:14px; padding:11px 0; border-bottom:1px solid var(--line); font-size:.84rem; }
 .ledger-row:last-child { border-bottom:0; }
