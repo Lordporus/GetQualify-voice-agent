@@ -1764,7 +1764,8 @@ async function apiAgentsUpdate(req, res, ctx) {
     const aRes = await db.query('SELECT * FROM agents WHERE id = $1', [id]);
     if (aRes.rowCount === 0) return core.sendJson(res, 404, { error: 'agent not found', code: 'not_found' });
     const aRow = aRes.rows[0];
-    if (aRow.tenant_id !== ctx.tenant.id) return core.sendJson(res, 403, { error: 'not your agent', code: 'forbidden' });
+    const agentTenantId = aRow.tenantId || aRow.tenant_id;
+    if (agentTenantId !== ctx.tenant.id) return core.sendJson(res, 403, { error: 'not your agent', code: 'forbidden' });
     
     let tts = aRow.tts || { provider: providers.tts.id };
     if (b.tts && typeof b.tts === 'object') {
@@ -1824,7 +1825,8 @@ async function apiAgentsDelete(req, res, ctx) {
   if (db.isPostgres) {
     const aRes = await db.query('SELECT tenant_id FROM agents WHERE id = $1', [id]);
     if (aRes.rowCount === 0) return core.sendJson(res, 404, { error: 'agent not found', code: 'not_found' });
-    if (aRes.rows[0].tenant_id !== ctx.tenant.id) return core.sendJson(res, 403, { error: 'not your agent', code: 'forbidden' });
+    const agentTenantId = aRes.rows[0].tenantId || aRes.rows[0].tenant_id;
+    if (agentTenantId !== ctx.tenant.id) return core.sendJson(res, 403, { error: 'not your agent', code: 'forbidden' });
     await db.query('DELETE FROM agents WHERE id = $1', [id]);
   } else {
     const agent = core.db().agents.find((a) => a.id === id);
