@@ -486,6 +486,7 @@ async function boot() {
     await db.query(`
       ALTER TABLE agents ADD COLUMN IF NOT EXISTS dograh_workflow_id INTEGER;
       ALTER TABLE agents ADD COLUMN IF NOT EXISTS dograh_embed_token TEXT;
+      ALTER TABLE agents ADD COLUMN IF NOT EXISTS template_config JSONB;
       CREATE INDEX IF NOT EXISTS idx_agents_dograh_token ON agents(dograh_embed_token);
     `).catch(() => {});
     await db.query(`
@@ -617,6 +618,7 @@ function publicAgent(a) {
     greeting: a.greeting, telephony: a.telephony, presetId: a.presetId || null,
     dograhWorkflowId: a.dograhWorkflowId || a.dograh_workflow_id || null,
     dograhEmbedToken: a.dograhEmbedToken || a.dograh_embed_token || null,
+    templateConfig: a.templateConfig || a.template_config || null,
     createdAt: a.createdAt,
   };
 }
@@ -1766,6 +1768,7 @@ async function apiAgentsList(req, res, ctx) {
         ...a, 
         tenantId: a.tenantId || a.tenant_id, 
         presetId: a.presetId || a.preset_id, 
+        templateConfig: a.templateConfig || a.template_config || null,
         createdAt: isoDate 
       }); 
     });
@@ -1802,6 +1805,8 @@ async function apiAgentsCreate(req, res, ctx) {
   const rawWf = b.dograhWorkflowId !== undefined ? b.dograhWorkflowId : (preset && (preset.dograhWorkflowId || preset.dograh_workflow_id));
   const dograhWorkflowId = Number.isInteger(Number(rawWf)) && Number(rawWf) > 0 ? Number(rawWf) : null;
 
+  const templateConfig = (b.templateConfig && typeof b.templateConfig === 'object') ? b.templateConfig : null;
+
   const agent = {
     id: core.genId('ag_'),
     tenantId: ctx.tenant.id,
@@ -1813,6 +1818,7 @@ async function apiAgentsCreate(req, res, ctx) {
     telephony: { did: String(b.did || providers.telephony.did).replace(/[^0-9]/g, '') || providers.telephony.did },
     dograhWorkflowId,
     dograhEmbedToken: null,
+    templateConfig,
     createdAt: new Date().toISOString(),
   };
 
@@ -1824,8 +1830,8 @@ async function apiAgentsCreate(req, res, ctx) {
 
   if (db.isPostgres) {
     await db.query(
-      'INSERT INTO agents (id, tenant_id, name, persona, tts, greeting, telephony, preset_id, dograh_workflow_id, dograh_embed_token, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
-      [agent.id, agent.tenantId, agent.name, agent.persona, agent.tts, agent.greeting, agent.telephony, agent.presetId, agent.dograhWorkflowId, agent.dograhEmbedToken, agent.createdAt]
+      'INSERT INTO agents (id, tenant_id, name, persona, tts, greeting, telephony, preset_id, dograh_workflow_id, dograh_embed_token, template_config, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
+      [agent.id, agent.tenantId, agent.name, agent.persona, agent.tts, agent.greeting, agent.telephony, agent.presetId, agent.dograhWorkflowId, agent.dograhEmbedToken, agent.templateConfig, agent.createdAt]
     );
   } else {
     await core.mutate((d) => { d.agents.push(agent); });
@@ -1867,6 +1873,9 @@ async function apiAgentsUpdate(req, res, ctx) {
       ? (Number.isInteger(Number(b.dograhWorkflowId)) && Number(b.dograhWorkflowId) > 0 ? Number(b.dograhWorkflowId) : null)
       : (aRow.dograh_workflow_id || aRow.dograhWorkflowId || null);
     let embToken = aRow.dograh_embed_token || aRow.dograhEmbedToken || null;
+    const templateConfig = b.templateConfig !== undefined
+      ? ((b.templateConfig && typeof b.templateConfig === 'object') ? b.templateConfig : null)
+      : (aRow.template_config || aRow.templateConfig || null);
 
     const syncRes = await dograh.syncAgentWorkflow({
       id,
@@ -1881,8 +1890,8 @@ async function apiAgentsUpdate(req, res, ctx) {
     const finalEmbToken = (syncRes && syncRes.ok && syncRes.embedToken) ? syncRes.embedToken : embToken;
 
     const upRes = await db.query(
-      'UPDATE agents SET name = $1, persona = $2, greeting = $3, telephony = $4, tts = $5, dograh_workflow_id = $6, dograh_embed_token = $7 WHERE id = $8 RETURNING *',
-      [name, persona, greeting, telephony, tts, finalWfId, finalEmbToken, id]
+      'UPDATE agents SET name = $1, persona = $2, greeting = $3, telephony = $4, tts = $5, dograh_workflow_id = $6, dograh_embed_token = $7, template_config = $8 WHERE id = $9 RETURNING *',
+      [name, persona, greeting, telephony, tts, finalWfId, finalEmbToken, templateConfig, id]
     );
     const row = upRes.rows[0];
     const crAt = row.createdAt || row.created_at;
@@ -1919,6 +1928,9 @@ async function apiAgentsUpdate(req, res, ctx) {
       }
       if (b.dograhWorkflowId !== undefined) {
         a.dograhWorkflowId = Number.isInteger(Number(b.dograhWorkflowId)) && Number(b.dograhWorkflowId) > 0 ? Number(b.dograhWorkflowId) : null;
+      }
+      if (b.templateConfig !== undefined) {
+        a.templateConfig = (b.templateConfig && typeof b.templateConfig === 'object') ? b.templateConfig : null;
       }
       if (syncRes && syncRes.ok) {
         if (syncRes.workflowId) a.dograhWorkflowId = syncRes.workflowId;
@@ -2518,9 +2530,9 @@ async function apiTelephonyDial(req, res, ctx) {
     if (targetAgentId) {
       workflowId = await resolveAgentDograhWorkflowId(targetAgentId, ctx.tenant.id);
     }
-    // Fallback to DOGRAH_WORKFLOW_ID only if no tenant routing is set
+    // Fallback to DOGRAH_WORKFLOW_ID (defaulting to Payal Salon #19) only if no tenant routing is set
     if (!workflowId) {
-      workflowId = Number(process.env.DOGRAH_WORKFLOW_ID || 1);
+      workflowId = Number(process.env.DOGRAH_WORKFLOW_ID || 19);
     }
   }
   try {

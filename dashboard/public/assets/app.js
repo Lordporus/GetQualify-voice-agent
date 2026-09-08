@@ -967,6 +967,162 @@ function refillDidOptions(scope) {
     numbers.forEach((n) => sel.appendChild(el('option', { value: n }, n)));
     if (cur) sel.value = cur;
   });
+function compileStructuredPersona(cfg) {
+  if (!cfg || typeof cfg !== 'object') return '';
+  const sections = [];
+  const identity = cfg.identity || {};
+  const roleName = String(identity.roleName || '').trim();
+  const businessName = String(identity.businessName || '').trim();
+  const businessType = String(identity.businessType || '').trim();
+  const languageMix = String(identity.languageMix || '').trim();
+
+  const introParts = [];
+  if (roleName && businessName) {
+    introParts.push(`You are ${roleName} representing ${businessName}${businessType ? ` (${businessType})` : ''}.`);
+  } else if (roleName) {
+    introParts.push(`You are ${roleName}.`);
+  } else if (businessName) {
+    introParts.push(`You are an AI assistant representing ${businessName}${businessType ? ` (${businessType})` : ''}.`);
+  }
+  introParts.push('Context: Live real-time telephone call in India.');
+  sections.push(introParts.join('\n'));
+
+  const rules = Array.isArray(cfg.rules) ? cfg.rules.filter(Boolean) : [];
+  if (languageMix || rules.length > 0) {
+    const lines = ['LANGUAGE & VOICE RULES:'];
+    if (languageMix) lines.push(`- Style: ${languageMix}`);
+    for (const r of rules) { lines.push(`- ${String(r).trim()}`); }
+    sections.push(lines.join('\n'));
+  }
+
+  const stages = Array.isArray(cfg.stages) ? cfg.stages.filter(Boolean) : [];
+  if (stages.length > 0) {
+    const lines = ['CONVERSATION STAGES:'];
+    stages.forEach((s, idx) => {
+      const name = String(s.name || s.id || `Stage ${idx + 1}`).trim();
+      const goal = String(s.goal || '').trim();
+      const reqData = Array.isArray(s.requiredData) && s.requiredData.length > 0
+        ? ` Capture: [${s.requiredData.join(', ')}]`
+        : '';
+      lines.push(`STAGE ${idx + 1} (${name}): Goal: ${goal}.${reqData}`);
+    });
+    sections.push(lines.join('\n'));
+  }
+
+  const schema = Array.isArray(cfg.dataSchema) ? cfg.dataSchema.filter(Boolean) : [];
+  if (schema.length > 0) {
+    const lines = ['DATA TO CAPTURE:'];
+    for (const d of schema) {
+      const label = String(d.label || d.fieldKey || 'Field').trim();
+      const key = String(d.fieldKey || '').trim();
+      const req = d.required ? ' [REQUIRED]' : '';
+      const desc = String(d.description || '').trim();
+      lines.push(`- ${label}${key ? ` (${key})` : ''}${req}${desc ? `: ${desc}` : ''}`);
+    }
+    sections.push(lines.join('\n'));
+  }
+
+  const objections = Array.isArray(cfg.objections) ? cfg.objections.filter(Boolean) : [];
+  if (objections.length > 0) {
+    const lines = ['OBJECTION HANDLING:'];
+    for (const o of objections) {
+      const trigger = String(o.trigger || '').trim();
+      const resp = String(o.response || '').trim();
+      if (trigger && resp) {
+        lines.push(`* If customer says: "${trigger}" -> Respond: "${resp}"`);
+      }
+    }
+    if (lines.length > 1) sections.push(lines.join('\n'));
+  }
+
+  const guardrails = Array.isArray(cfg.guardrails) ? cfg.guardrails.filter(Boolean) : [];
+  if (guardrails.length > 0) {
+    const lines = ['STRICT GUARDRAILS:'];
+    for (const g of guardrails) {
+      lines.push(`! ${String(g).trim()}`);
+    }
+    sections.push(lines.join('\n'));
+  }
+
+  const exampleDialog = String(cfg.exampleDialog || '').trim();
+  if (exampleDialog) {
+    sections.push(`CONVERSATION EXAMPLE:\n${exampleDialog}`);
+  }
+
+  return sections.join('\n\n');
+}
+
+function defaultStructuredAgentConfig(industry) {
+  const ind = industry || 'salon';
+  if (ind === 'clinic') {
+    return {
+      version: 2,
+      identity: {
+        roleName: 'Payal, Clinic Receptionist',
+        businessName: 'Apex Health Clinic',
+        businessType: 'Family Healthcare & Diagnostic Centre',
+        languageMix: 'Warm, empathetic Hindi-English (Hinglish) mix'
+      },
+      rules: [
+        'ONE or TWO short sentences per turn',
+        'Empathetic, clear, and reassuring tone',
+        'Never say "sorry, I didn\'t catch that" more than once'
+      ],
+      stages: [
+        { id: 'greeting', name: 'Greeting & Triage', goal: 'Greet caller and understand if booking or medical query', requiredData: ['caller_name'] },
+        { id: 'specialty', name: 'Specialty Selection', goal: 'Identify required doctor / department', requiredData: ['department'] },
+        { id: 'booking', name: 'Slot Confirmation', goal: 'Confirm available slot and contact number', requiredData: ['preferred_time', 'phone'] }
+      ],
+      dataSchema: [
+        { fieldKey: 'caller_name', label: 'Patient Name', required: true, description: 'Full name of patient' },
+        { fieldKey: 'department', label: 'Department', required: true, description: 'General Physician, Dental, Ortho, etc.' },
+        { fieldKey: 'preferred_time', label: 'Preferred Slot', required: true, description: 'Morning / Evening slot' }
+      ],
+      objections: [
+        { trigger: 'Consultation fees kitni hai?', response: 'General physician consultation ₹500 hai. Specialist consultation ₹800 hai.' },
+        { trigger: 'Can I speak to doctor right now?', response: 'Doctor abhi patients attend kar rahe hain. Main appointment book kar sakti hoon ya urgent helpline de sakti hoon.' }
+      ],
+      guardrails: [
+        'Never prescribe medicines or give medical diagnosis',
+        'For chest pain, breathing difficulty, or trauma, advise visiting Emergency immediately',
+        'Confirm appointment day and time twice'
+      ],
+      exampleDialog: 'Caller: Namaste, Dr. Sharma se milna tha.\nPayal: Namaste! Dr. Sharma kal subah 10 baje se available hain. Kya main aapka appointment schedule kar doon?'
+    };
+  }
+  return {
+    version: 2,
+    identity: {
+      roleName: 'Payal, Front Desk Receptionist',
+      businessName: 'Envy Salon & Spa',
+      businessType: 'Hair, Skin & Beauty Salon',
+      languageMix: 'Warm, conversational Hindi-English (Hinglish) mix'
+    },
+    rules: [
+      'ONE or TWO short sentences per turn',
+      'Like a friendly neighborhood receptionist',
+      'Never say "sorry, I didn\'t catch that" more than once in entire call'
+    ],
+    stages: [
+      { id: 'greeting', name: 'Greeting & Treatment Inquiry', goal: 'Greet warmly and ask what service they need', requiredData: ['service_type'] },
+      { id: 'booking', name: 'Time & Stylist Selection', goal: 'Confirm preferred day/time and specialist', requiredData: ['preferred_time', 'caller_name'] },
+      { id: 'closing', name: 'Warm Confirmation', goal: 'Confirm booking warmly in 6-10 words', requiredData: [] }
+    ],
+    dataSchema: [
+      { fieldKey: 'caller_name', label: 'Customer Name', required: true, description: 'Customer full name' },
+      { fieldKey: 'service_type', label: 'Service Requested', required: true, description: 'Haircut, Hair Spa, Facial, etc.' },
+      { fieldKey: 'preferred_time', label: 'Preferred Time', required: true, description: 'Date and time slot' }
+    ],
+    objections: [
+      { trigger: 'Price is too high / costly', response: 'Sir humara weekday package chal raha hai jisme 15% flat off milega.' },
+      { trigger: 'Kitna time lagega?', response: 'Haircut mein almost 30-40 minutes lagenge, aur spa session 1 ghante ka hota hai.' }
+    ],
+    guardrails: [
+      'Never give chemical treatment guarantees on sensitive scalp',
+      'Always confirm appointment time twice before hanging up'
+    ],
+    exampleDialog: 'Caller: Hi, haircut karwana tha aaj.\nPayal: Bilkul! Aaj shaam 4 baje ya 6 baje slot khali hai. Aapko kaunsa time suit karega?'
+  };
 }
 
 function buildAgentForm(existing) {
@@ -980,8 +1136,12 @@ function buildAgentForm(existing) {
     f0: tts.f0_up_key != null ? tts.f0_up_key : 0
   };
 
+  const rawCfg = e.templateConfig || e.template_config || null;
+  let structuredConfig = rawCfg ? JSON.parse(JSON.stringify(rawCfg)) : defaultStructuredAgentConfig('salon');
+  let builderMode = (existing && !rawCfg) ? 'raw' : 'guided';
+
   const nameI = el('input', { class: 'input', id: 'f_name', type: 'text', value: e.name || '', placeholder: 'Front Desk', maxlength: 80 });
-  const personaI = el('textarea', { class: 'textarea', id: 'f_persona', rows: 4, placeholder: 'You are a warm, sharp receptionist. Answer in 1 to 2 short spoken sentences, qualify the lead, and book a callback.' }, e.persona || '');
+  const personaI = el('textarea', { class: 'textarea', id: 'f_persona', rows: 5, placeholder: 'You are a warm, sharp receptionist. Answer in 1 to 2 short spoken sentences, qualify the lead, and book a callback.' }, e.persona || '');
   const greetI = el('input', { class: 'input', id: 'f_greeting', type: 'text', value: e.greeting || '', placeholder: 'Hi, thanks for calling GetQualify. How can I help today.', maxlength: 240 });
   const descI = el('input', { class: 'input', id: 'f_desc', type: 'text', value: (tts.description || ''), placeholder: 'Optional voice direction, e.g. calm and confident' });
 
@@ -1033,12 +1193,320 @@ function buildAgentForm(existing) {
     toneField.style.display = isMul ? 'none' : '';
   }
 
+  // ─── ACCORDION & GUIDED BUILDER STATE & UI ─────────────────────────────
+  function makeAccordionItem(title, badge, bodyEl, isOpenDefault = false) {
+    const item = el('div', { class: 'builder-acc-item' + (isOpenDefault ? ' is-open' : '') });
+    const header = el('button', { type: 'button', class: 'builder-acc-header' }, [
+      el('div', { class: 'builder-acc-header-left' }, [
+        el('span', {}, title),
+        badge ? el('span', { class: 'builder-acc-badge' }, badge) : null
+      ]),
+      el('span', { class: 'builder-acc-chevron' }, '▼')
+    ]);
+    header.onclick = (ev) => {
+      ev.preventDefault();
+      item.classList.toggle('is-open');
+    };
+    const body = el('div', { class: 'builder-acc-body' }, [bodyEl]);
+    item.appendChild(header);
+    item.appendChild(body);
+    return item;
+  }
+
+  const promptPreviewEl = el('pre', { class: 'compiled-prompt-preview' }, '');
+  function updatePreview() {
+    const compiled = compileStructuredPersona(structuredConfig);
+    promptPreviewEl.textContent = compiled || '(Empty persona prompt)';
+    if (builderMode === 'guided') {
+      personaI.value = compiled;
+    }
+  }
+
+  // 1. Identity & Voice Rules
+  const roleNameI = el('input', { class: 'input', type: 'text', value: structuredConfig.identity?.roleName || '', placeholder: 'Payal, Front Desk Receptionist' });
+  const bizNameI = el('input', { class: 'input', type: 'text', value: structuredConfig.identity?.businessName || '', placeholder: 'Envy Salon & Spa' });
+  const bizTypeI = el('input', { class: 'input', type: 'text', value: structuredConfig.identity?.businessType || '', placeholder: 'Hair, Skin & Beauty Salon' });
+  const langMixI = el('input', { class: 'input', type: 'text', value: structuredConfig.identity?.languageMix || '', placeholder: 'Warm, conversational Hindi-English (Hinglish) mix' });
+
+  roleNameI.oninput = () => { structuredConfig.identity.roleName = roleNameI.value; updatePreview(); };
+  bizNameI.oninput = () => { structuredConfig.identity.businessName = bizNameI.value; updatePreview(); };
+  bizTypeI.oninput = () => { structuredConfig.identity.businessType = bizTypeI.value; updatePreview(); };
+  langMixI.oninput = () => { structuredConfig.identity.languageMix = langMixI.value; updatePreview(); };
+
+  const rulesListEl = el('div', { class: 'builder-items-list' });
+  function renderRules() {
+    rulesListEl.innerHTML = '';
+    (structuredConfig.rules || []).forEach((r, idx) => {
+      const rInput = el('input', { class: 'input', type: 'text', value: r, placeholder: 'Voice rule...' });
+      rInput.oninput = () => { structuredConfig.rules[idx] = rInput.value; updatePreview(); };
+      const delBtn = el('button', { type: 'button', class: 'builder-btn-icon-danger', title: 'Delete rule' }, '🗑️');
+      delBtn.onclick = () => { structuredConfig.rules.splice(idx, 1); renderRules(); updatePreview(); };
+      rulesListEl.appendChild(el('div', { class: 'flex gap-2 items-center' }, [rInput, delBtn]));
+    });
+  }
+  const addRuleBtn = el('button', { type: 'button', class: 'builder-btn-add' }, '+ Add Voice Rule');
+  addRuleBtn.onclick = () => {
+    structuredConfig.rules = structuredConfig.rules || [];
+    structuredConfig.rules.push('');
+    renderRules();
+    updatePreview();
+  };
+  renderRules();
+
+  const sec1Body = el('div', { class: 'flex flex-col gap-3' }, [
+    el('div', { class: 'form-grid' }, [
+      field('Role Name / Persona Title', roleNameI),
+      field('Business Name', bizNameI),
+      field('Business Category / Industry', bizTypeI),
+      field('Speaking Style / Language Mix', langMixI)
+    ]),
+    el('div', { style: 'margin-top:8px' }, [
+      el('div', { style: 'font-weight:600;font-size:12px;margin-bottom:6px;color:var(--ink)' }, 'Turn-by-Turn Voice Rules:'),
+      rulesListEl,
+      addRuleBtn
+    ])
+  ]);
+
+  // 2. Conversation Stages
+  const stagesListEl = el('div', { class: 'builder-items-list' });
+  function renderStages() {
+    stagesListEl.innerHTML = '';
+    (structuredConfig.stages || []).forEach((st, idx) => {
+      const nameIn = el('input', { class: 'input', type: 'text', value: st.name || '', placeholder: 'Stage Name (e.g. Booking)' });
+      const goalIn = el('input', { class: 'input', type: 'text', value: st.goal || '', placeholder: 'Stage Goal (e.g. Find preferred time)' });
+      const dataIn = el('input', { class: 'input', type: 'text', value: (st.requiredData || []).join(', '), placeholder: 'Data to capture (e.g. caller_name, service)' });
+
+      nameIn.oninput = () => { st.name = nameIn.value; updatePreview(); };
+      goalIn.oninput = () => { st.goal = goalIn.value; updatePreview(); };
+      dataIn.oninput = () => {
+        st.requiredData = dataIn.value.split(',').map((x) => x.trim()).filter(Boolean);
+        updatePreview();
+      };
+
+      const delBtn = el('button', { type: 'button', class: 'builder-btn-icon-danger', title: 'Delete stage' }, '🗑️');
+      delBtn.onclick = () => { structuredConfig.stages.splice(idx, 1); renderStages(); updatePreview(); };
+
+      const row = el('div', { class: 'builder-card-row' }, [
+        el('div', { class: 'builder-row-fields' }, [
+          field('Stage ' + (idx + 1) + ' Name', nameIn),
+          field('Required Data Keys', dataIn),
+          (function() { const f = field('Stage Goal', goalIn); f.classList.add('builder-row-full'); return f; })()
+        ]),
+        delBtn
+      ]);
+      stagesListEl.appendChild(row);
+    });
+  }
+  const addStageBtn = el('button', { type: 'button', class: 'builder-btn-add' }, '+ Add Conversation Stage');
+  addStageBtn.onclick = () => {
+    structuredConfig.stages = structuredConfig.stages || [];
+    structuredConfig.stages.push({ id: 'stage_' + (structuredConfig.stages.length + 1), name: '', goal: '', requiredData: [] });
+    renderStages();
+    updatePreview();
+  };
+  renderStages();
+
+  const sec2Body = el('div', { class: 'flex flex-col gap-3' }, [
+    stagesListEl,
+    addStageBtn
+  ]);
+
+  // 3. Data to Capture
+  const dataListEl = el('div', { class: 'builder-items-list' });
+  function renderDataSchema() {
+    dataListEl.innerHTML = '';
+    (structuredConfig.dataSchema || []).forEach((ds, idx) => {
+      const lblIn = el('input', { class: 'input', type: 'text', value: ds.label || '', placeholder: 'Field Label (e.g. Customer Name)' });
+      const keyIn = el('input', { class: 'input', type: 'text', value: ds.fieldKey || '', placeholder: 'Key (e.g. caller_name)' });
+      const descIn = el('input', { class: 'input', type: 'text', value: ds.description || '', placeholder: 'Description for extraction' });
+      const reqCb = el('input', { type: 'checkbox', checked: !!ds.required });
+
+      lblIn.oninput = () => { ds.label = lblIn.value; updatePreview(); };
+      keyIn.oninput = () => { ds.fieldKey = keyIn.value; updatePreview(); };
+      descIn.oninput = () => { ds.description = descIn.value; updatePreview(); };
+      reqCb.onchange = () => { ds.required = reqCb.checked; updatePreview(); };
+
+      const reqLabel = el('label', { class: 'flex items-center gap-1', style: 'font-size:12px;font-weight:600;cursor:pointer' }, [reqCb, el('span', {}, 'Required')]);
+      const delBtn = el('button', { type: 'button', class: 'builder-btn-icon-danger', title: 'Delete field' }, '🗑️');
+      delBtn.onclick = () => { structuredConfig.dataSchema.splice(idx, 1); renderDataSchema(); updatePreview(); };
+
+      const row = el('div', { class: 'builder-card-row' }, [
+        el('div', { class: 'builder-row-fields' }, [
+          field('Field Label', lblIn),
+          field('Key (JSON parameter)', keyIn),
+          field('Description', descIn),
+          field('Validation', reqLabel)
+        ]),
+        delBtn
+      ]);
+      dataListEl.appendChild(row);
+    });
+  }
+  const addDataBtn = el('button', { type: 'button', class: 'builder-btn-add' }, '+ Add Data Field');
+  addDataBtn.onclick = () => {
+    structuredConfig.dataSchema = structuredConfig.dataSchema || [];
+    structuredConfig.dataSchema.push({ fieldKey: '', label: '', required: true, description: '' });
+    renderDataSchema();
+    updatePreview();
+  };
+  renderDataSchema();
+
+  const sec3Body = el('div', { class: 'flex flex-col gap-3' }, [
+    dataListEl,
+    addDataBtn
+  ]);
+
+  // 4. Objection Handling
+  const objListEl = el('div', { class: 'builder-items-list' });
+  function renderObjections() {
+    objListEl.innerHTML = '';
+    (structuredConfig.objections || []).forEach((ob, idx) => {
+      const trigIn = el('input', { class: 'input', type: 'text', value: ob.trigger || '', placeholder: 'Customer pushback (e.g. Price is too high)' });
+      const respIn = el('input', { class: 'input', type: 'text', value: ob.response || '', placeholder: 'Agent counter-response (e.g. Offer 15% first-time discount)' });
+
+      trigIn.oninput = () => { ob.trigger = trigIn.value; updatePreview(); };
+      respIn.oninput = () => { ob.response = respIn.value; updatePreview(); };
+
+      const delBtn = el('button', { type: 'button', class: 'builder-btn-icon-danger', title: 'Delete objection' }, '🗑️');
+      delBtn.onclick = () => { structuredConfig.objections.splice(idx, 1); renderObjections(); updatePreview(); };
+
+      const row = el('div', { class: 'builder-card-row' }, [
+        el('div', { class: 'builder-row-fields' }, [
+          field('Customer Objection / Trigger', trigIn),
+          field('Agent Counter-Response', respIn)
+        ]),
+        delBtn
+      ]);
+      objListEl.appendChild(row);
+    });
+  }
+  const addObjBtn = el('button', { type: 'button', class: 'builder-btn-add' }, '+ Add Objection Scenario');
+  addObjBtn.onclick = () => {
+    structuredConfig.objections = structuredConfig.objections || [];
+    structuredConfig.objections.push({ trigger: '', response: '' });
+    renderObjections();
+    updatePreview();
+  };
+  renderObjections();
+
+  const sec4Body = el('div', { class: 'flex flex-col gap-3' }, [
+    objListEl,
+    addObjBtn
+  ]);
+
+  // 5. Strict Guardrails
+  const guardsListEl = el('div', { class: 'builder-items-list' });
+  function renderGuardrails() {
+    guardsListEl.innerHTML = '';
+    (structuredConfig.guardrails || []).forEach((g, idx) => {
+      const gIn = el('input', { class: 'input', type: 'text', value: g, placeholder: 'Safety prohibition / rule...' });
+      gIn.oninput = () => { structuredConfig.guardrails[idx] = gIn.value; updatePreview(); };
+      const delBtn = el('button', { type: 'button', class: 'builder-btn-icon-danger', title: 'Delete rule' }, '🗑️');
+      delBtn.onclick = () => { structuredConfig.guardrails.splice(idx, 1); renderGuardrails(); updatePreview(); };
+      guardsListEl.appendChild(el('div', { class: 'flex gap-2 items-center' }, [gIn, delBtn]));
+    });
+  }
+  const addGuardBtn = el('button', { type: 'button', class: 'builder-btn-add' }, '+ Add Safety Guardrail');
+  addGuardBtn.onclick = () => {
+    structuredConfig.guardrails = structuredConfig.guardrails || [];
+    structuredConfig.guardrails.push('');
+    renderGuardrails();
+    updatePreview();
+  };
+  renderGuardrails();
+
+  const sec5Body = el('div', { class: 'flex flex-col gap-3' }, [
+    guardsListEl,
+    addGuardBtn
+  ]);
+
+  // 6. Dialogue Sample & Live Preview
+  const exampleDialogI = el('textarea', { class: 'textarea', rows: 4, placeholder: 'Caller: Kitna time lagega?\nAgent: Haircut mein 30 minutes lagenge sir.' }, structuredConfig.exampleDialog || '');
+  exampleDialogI.oninput = () => { structuredConfig.exampleDialog = exampleDialogI.value; updatePreview(); };
+
+  const sec6Body = el('div', { class: 'flex flex-col gap-3' }, [
+    field('Multi-turn Realistic Example Dialogue', exampleDialogI),
+    el('div', { style: 'margin-top:8px' }, [
+      el('div', { style: 'font-weight:600;font-size:12px;margin-bottom:4px;color:var(--ink-soft)' }, 'Live Compiled System Prompt Preview:'),
+      promptPreviewEl
+    ])
+  ]);
+
+  function syncAllAccordionInputs() {
+    roleNameI.value = structuredConfig.identity?.roleName || '';
+    bizNameI.value = structuredConfig.identity?.businessName || '';
+    bizTypeI.value = structuredConfig.identity?.businessType || '';
+    langMixI.value = structuredConfig.identity?.languageMix || '';
+    exampleDialogI.value = structuredConfig.exampleDialog || '';
+    renderRules();
+    renderStages();
+    renderDataSchema();
+    renderObjections();
+    renderGuardrails();
+    updatePreview();
+  }
+
+  // Accordion Wrapper
+  const accordionContainer = el('div', { class: 'builder-accordion full' }, [
+    makeAccordionItem('Section 1: Identity, Brand & Voice Rules', 'Identity', sec1Body, true),
+    makeAccordionItem('Section 2: Conversation Stages (State Machine)', 'Stages', sec2Body, false),
+    makeAccordionItem('Section 3: Data to Capture (Lead Schema)', 'Data', sec3Body, false),
+    makeAccordionItem('Section 4: Objection Handling Matrix', 'Objections', sec4Body, false),
+    makeAccordionItem('Section 5: Strict Safety Guardrails', 'Guardrails', sec5Body, false),
+    makeAccordionItem('Section 6: Multi-turn Example & Live Prompt Preview', 'Preview', sec6Body, true)
+  ]);
+
+  // Raw Prompt Container
+  const rawContainer = (function() {
+    const f = field('Persona (System Prompt)', personaI);
+    f.classList.add('full');
+    return f;
+  })();
+
+  // Mode Switcher Bar
+  const modeBar = el('div', { class: 'builder-mode-toggle-bar full' }, [
+    el('div', { class: 'builder-mode-label' }, 'Agent Persona Builder:'),
+    el('div', { class: 'seg', id: existing ? 'f_mode_seg_modal' : 'f_mode_seg' }, [
+      el('button', {
+        type: 'button',
+        class: builderMode === 'guided' ? 'on' : '',
+        onclick: () => setMode('guided')
+      }, '🪄 Guided Builder (Recommended)'),
+      el('button', {
+        type: 'button',
+        class: builderMode === 'raw' ? 'on' : '',
+        onclick: () => setMode('raw')
+      }, '📝 Raw Prompt')
+    ])
+  ]);
+
+  function setMode(mode) {
+    builderMode = mode;
+    $$('.builder-mode-toggle-bar .seg button', card).forEach((b, idx) => {
+      b.classList.toggle('on', (mode === 'guided' && idx === 0) || (mode === 'raw' && idx === 1));
+    });
+    if (mode === 'guided') {
+      accordionContainer.style.display = '';
+      rawContainer.style.display = 'none';
+      updatePreview();
+    } else {
+      accordionContainer.style.display = 'none';
+      rawContainer.style.display = '';
+      personaI.value = compileStructuredPersona(structuredConfig) || personaI.value;
+    }
+  }
+
+  setMode(builderMode);
+  updatePreview();
+
   const submitBtn = el('button', { class: 'btn btn-primary' }, existing ? 'Save changes' : 'Create agent');
   const form = el('form', { onsubmit: onSave }, [
     el('div', { class: 'form-grid' }, [
       field('Agent name', nameI),
       field('Assigned number', didSel),
-      (function () { const f = field('Persona', personaI); f.classList.add('full'); return f; })(),
+      modeBar,
+      accordionContainer,
+      rawContainer,
       (function () { const f = field('Greeting', greetI); f.classList.add('full'); return f; })(),
       field('Voice model', modelSeg),
       pitchField,
@@ -1066,16 +1534,51 @@ function buildAgentForm(existing) {
           type: 'button',
           class: 'btn btn-sm btn-primary',
           style: 'background:#ca8a04;border-color:#ca8a04;color:#fff',
-          onclick: () => choosePayalTemplateModal(nameI, personaI, greetI, descI)
+          onclick: () => choosePayalTemplateModal(nameI, personaI, greetI, descI, (newConfig) => {
+            if (newConfig) {
+              structuredConfig = JSON.parse(JSON.stringify(newConfig));
+              syncAllAccordionInputs();
+              setMode('guided');
+            }
+          })
         }, '🇮🇳 Payal Receptionist (Indian Market)'),
         el('button', {
           type: 'button',
           class: 'btn btn-sm btn-ghost',
           onclick: () => {
             nameI.value = 'Ria Receptionist';
-            personaI.value = 'You are Ria, the AI voice agent for GetQualify. You are on a live phone call in English.\n\n- ONE or TWO short sentences per turn.\n- Plain spoken English.\n- Warm, quick, confident.';
             greetI.value = 'Hi, thanks for calling GetQualify. How can I help today?';
             descI.value = 'Sharp, confident, friendly receptionist';
+            structuredConfig = {
+              version: 2,
+              identity: {
+                roleName: 'Ria, Voice Agent',
+                businessName: 'GetQualify',
+                businessType: 'Voice AI Infrastructure',
+                languageMix: 'Plain spoken, confident English'
+              },
+              rules: [
+                'ONE or TWO short sentences per turn',
+                'Warm, quick, confident',
+                'Never ramble or use complex jargon'
+              ],
+              stages: [
+                { id: 'greeting', name: 'Greeting & Qualification', goal: 'Greet warmly and understand their business requirement', requiredData: ['business_type'] },
+                { id: 'demo', name: 'Product Value', goal: 'Explain voice agent features and lead qualification', requiredData: [] },
+                { id: 'callback', name: 'Book Callback', goal: 'Get email and schedule a demo callback', requiredData: ['email', 'caller_name'] }
+              ],
+              dataSchema: [
+                { fieldKey: 'caller_name', label: 'Name', required: true, description: 'Caller name' },
+                { fieldKey: 'email', label: 'Work Email', required: true, description: 'Work email address' }
+              ],
+              objections: [
+                { trigger: 'What does it cost?', response: 'Our plans start with 15 free test minutes, then pay-as-you-go per minute.' }
+              ],
+              guardrails: ['Never promise unsupported integrations', 'Always confirm email address'],
+              exampleDialog: 'Caller: What does GetQualify do?\nRia: We build AI voice receptionists for Indian businesses that answer calls and book clients automatically.'
+            };
+            syncAllAccordionInputs();
+            setMode('guided');
             toast('Applied Ria (Global English) template.', 'ok');
           }
         }, '🌐 Ria (Global English)'),
@@ -1087,6 +1590,17 @@ function buildAgentForm(existing) {
             personaI.value = '';
             greetI.value = '';
             descI.value = '';
+            structuredConfig = {
+              version: 2,
+              identity: { roleName: '', businessName: '', businessType: '', languageMix: '' },
+              rules: ['ONE or TWO short sentences per turn'],
+              stages: [{ id: 'greeting', name: 'Greeting', goal: 'Greet caller politely', requiredData: [] }],
+              dataSchema: [],
+              objections: [],
+              guardrails: ['Always confirm critical information twice'],
+              exampleDialog: ''
+            };
+            syncAllAccordionInputs();
             toast('Reset to blank agent.', 'ok');
           }
         }, '✏️ Blank Agent')
@@ -1105,8 +1619,19 @@ function buildAgentForm(existing) {
   async function onSave(ev) {
     ev.preventDefault();
     const name = nameI.value.trim();
-    const persona = personaI.value.trim();
     if (!name) { toast('Give the agent a name.', 'err'); nameI.focus(); return; }
+
+    let persona = '';
+    let templateConfigPayload = null;
+
+    if (builderMode === 'guided') {
+      persona = compileStructuredPersona(structuredConfig);
+      templateConfigPayload = structuredConfig;
+    } else {
+      persona = personaI.value.trim();
+      templateConfigPayload = rawCfg;
+    }
+
     if (!persona) { toast('Add a persona so the agent knows how to behave.', 'err'); personaI.focus(); return; }
     submitBtn.disabled = true; submitBtn.textContent = existing ? 'Saving...' : 'Creating...';
     const payload = {
@@ -1114,6 +1639,7 @@ function buildAgentForm(existing) {
       persona: persona,
       greeting: greetI.value.trim(),
       did: didSel.value || '',
+      templateConfig: templateConfigPayload,
       tts: {
         model: state.model,
         speaker: state.model === 'mulberry' ? state.speaker : undefined,
@@ -1148,7 +1674,7 @@ function buildAgentForm(existing) {
   return card;
 }
 
-function choosePayalTemplateModal(nameI, personaI, greetI, descI) {
+function choosePayalTemplateModal(nameI, personaI, greetI, descI, onConfigSelect) {
   const payalPresets = (State.presets || []).filter((p) => p.slug?.includes('payal'));
   const options = [
     {
@@ -1207,6 +1733,9 @@ function choosePayalTemplateModal(nameI, personaI, greetI, descI) {
         personaI.value = finalPersona;
         greetI.value = finalGreet;
         descI.value = 'Warm Indian receptionist (Deepgram Aura-2 Helena)';
+        if (typeof onConfigSelect === 'function') {
+          onConfigSelect(defaultStructuredAgentConfig(opt.id));
+        }
         toast('Applied ' + finalName + ' template.', 'ok');
         const host = $('#modal-host');
         if (host) { host.classList.add('hide'); host.setAttribute('aria-hidden', 'true'); host.innerHTML = ''; }

@@ -514,7 +514,7 @@ const telVobiz = {
       num = '+91' + stripped;
     }
     const result = await this.request('POST', '/api/v1/telephony/initiate-call', {
-      workflow_id: Number.isInteger(options.workflowId) && options.workflowId > 0 ? options.workflowId : positiveIntEnv('DOGRAH_WORKFLOW_ID'),
+      workflow_id: Number.isInteger(options.workflowId) && options.workflowId > 0 ? options.workflowId : (positiveIntEnv('DOGRAH_WORKFLOW_ID') || 19),
       telephony_configuration_id: positiveIntEnv('DOGRAH_TELEPHONY_CONFIG_ID'),
       from_phone_number_id: Number.isInteger(options.fromPhoneNumberId) && options.fromPhoneNumberId > 0 ? options.fromPhoneNumberId : positiveIntEnv('DOGRAH_PHONE_NUMBER_ID'),
       phone_number: num,

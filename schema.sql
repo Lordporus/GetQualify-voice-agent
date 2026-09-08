@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS agents (
   preset_id TEXT,
   dograh_workflow_id INTEGER,
   dograh_embed_token TEXT,
+  template_config JSONB,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
