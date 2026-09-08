@@ -63,6 +63,7 @@ const sms = require('./lib/sms');
 const calendar = require('./lib/calendar');
 const storage = require('./lib/storage');
 const email = require('./lib/email');
+const dograh = require('./lib/dograh');
 const queue = require('./lib/queue');
 const whatsapp = require('./lib/whatsapp');
 
@@ -484,6 +485,8 @@ async function boot() {
     `).catch(() => {});
     await db.query(`
       ALTER TABLE agents ADD COLUMN IF NOT EXISTS dograh_workflow_id INTEGER;
+      ALTER TABLE agents ADD COLUMN IF NOT EXISTS dograh_embed_token TEXT;
+      CREATE INDEX IF NOT EXISTS idx_agents_dograh_token ON agents(dograh_embed_token);
     `).catch(() => {});
     await db.query(`
       CREATE TABLE IF NOT EXISTS tenant_call_routing (
@@ -613,6 +616,7 @@ function publicAgent(a) {
     id: a.id, name: a.name, persona: a.persona, tts: a.tts,
     greeting: a.greeting, telephony: a.telephony, presetId: a.presetId || null,
     dograhWorkflowId: a.dograhWorkflowId || a.dograh_workflow_id || null,
+    dograhEmbedToken: a.dograhEmbedToken || a.dograh_embed_token || null,
     createdAt: a.createdAt,
   };
 }
@@ -1808,13 +1812,20 @@ async function apiAgentsCreate(req, res, ctx) {
     presetId: preset ? preset.id : null,
     telephony: { did: String(b.did || providers.telephony.did).replace(/[^0-9]/g, '') || providers.telephony.did },
     dograhWorkflowId,
+    dograhEmbedToken: null,
     createdAt: new Date().toISOString(),
   };
 
+  const syncRes = await dograh.syncAgentWorkflow(agent);
+  if (syncRes && syncRes.ok) {
+    agent.dograhWorkflowId = syncRes.workflowId;
+    agent.dograhEmbedToken = syncRes.embedToken;
+  }
+
   if (db.isPostgres) {
     await db.query(
-      'INSERT INTO agents (id, tenant_id, name, persona, tts, greeting, telephony, preset_id, dograh_workflow_id, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)',
-      [agent.id, agent.tenantId, agent.name, agent.persona, agent.tts, agent.greeting, agent.telephony, agent.presetId, agent.dograhWorkflowId, agent.createdAt]
+      'INSERT INTO agents (id, tenant_id, name, persona, tts, greeting, telephony, preset_id, dograh_workflow_id, dograh_embed_token, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)',
+      [agent.id, agent.tenantId, agent.name, agent.persona, agent.tts, agent.greeting, agent.telephony, agent.presetId, agent.dograhWorkflowId, agent.dograhEmbedToken, agent.createdAt]
     );
   } else {
     await core.mutate((d) => { d.agents.push(agent); });
@@ -1839,10 +1850,9 @@ async function apiAgentsUpdate(req, res, ctx) {
       if (b.tts.model != null) tts.model = b.tts.model === 'muga' ? 'muga' : providers.tts.model;
       if (providers.TTS_SPEAKERS.has(b.tts.speaker)) tts.speaker = b.tts.speaker;
       if (Number.isFinite(b.tts.f0_up_key)) tts.f0_up_key = Math.max(-12, Math.min(12, b.tts.f0_up_key | 0));
-      if (tts.model === 'muga' && typeof b.tts.tone === 'string') {
-        tts.tone = b.tts.tone.slice(0, 30);
-      } else if (tts.model && tts.model !== 'muga') {
-        delete tts.tone;
+      if (b.tts.tone !== undefined) {
+        if (tts.model === 'muga' && typeof b.tts.tone === 'string') tts.tone = b.tts.tone.slice(0, 30);
+        else delete tts.tone;
       }
       tts.provider = providers.tts.id;
     }
@@ -1856,10 +1866,23 @@ async function apiAgentsUpdate(req, res, ctx) {
     const wfId = b.dograhWorkflowId !== undefined
       ? (Number.isInteger(Number(b.dograhWorkflowId)) && Number(b.dograhWorkflowId) > 0 ? Number(b.dograhWorkflowId) : null)
       : (aRow.dograh_workflow_id || aRow.dograhWorkflowId || null);
-    
+    let embToken = aRow.dograh_embed_token || aRow.dograhEmbedToken || null;
+
+    const syncRes = await dograh.syncAgentWorkflow({
+      id,
+      name,
+      persona,
+      greeting,
+      tts,
+      dograhWorkflowId: wfId,
+      dograhEmbedToken: embToken,
+    });
+    const finalWfId = (syncRes && syncRes.ok && syncRes.workflowId) ? syncRes.workflowId : wfId;
+    const finalEmbToken = (syncRes && syncRes.ok && syncRes.embedToken) ? syncRes.embedToken : embToken;
+
     const upRes = await db.query(
-      'UPDATE agents SET name = $1, persona = $2, greeting = $3, telephony = $4, tts = $5, dograh_workflow_id = $6 WHERE id = $7 RETURNING *',
-      [name, persona, greeting, telephony, tts, wfId, id]
+      'UPDATE agents SET name = $1, persona = $2, greeting = $3, telephony = $4, tts = $5, dograh_workflow_id = $6, dograh_embed_token = $7 WHERE id = $8 RETURNING *',
+      [name, persona, greeting, telephony, tts, finalWfId, finalEmbToken, id]
     );
     const row = upRes.rows[0];
     const crAt = row.createdAt || row.created_at;
@@ -1896,6 +1919,10 @@ async function apiAgentsUpdate(req, res, ctx) {
       }
       if (b.dograhWorkflowId !== undefined) {
         a.dograhWorkflowId = Number.isInteger(Number(b.dograhWorkflowId)) && Number(b.dograhWorkflowId) > 0 ? Number(b.dograhWorkflowId) : null;
+      }
+      if (syncRes && syncRes.ok) {
+        if (syncRes.workflowId) a.dograhWorkflowId = syncRes.workflowId;
+        if (syncRes.embedToken) a.dograhEmbedToken = syncRes.embedToken;
       }
       updated = a;
     });
@@ -1987,7 +2014,28 @@ async function apiStt(req, res, ctx) {
 }
 
 async function mintDograhVoiceSession(req, context) {
-  const token = String(process.env.DOGRAH_EMBED_TOKEN || '').trim();
+  let token = '';
+  const agentId = String((context && context.agentId) || '').trim();
+
+  if (agentId) {
+    if (db.isPostgres) {
+      const aRes = await db.query('SELECT dograh_embed_token, dograh_workflow_id FROM agents WHERE id = $1', [agentId]).catch(() => ({ rows: [] }));
+      if (aRes.rows && aRes.rows.length > 0) {
+        token = String(aRes.rows[0].dograh_embed_token || '').trim();
+      }
+    } else {
+      const agent = (core.db().agents || []).find((a) => a.id === agentId);
+      if (agent) {
+        token = String(agent.dograhEmbedToken || agent.dograh_embed_token || '').trim();
+      }
+    }
+  }
+
+  // Fallback to default DOGRAH_EMBED_TOKEN if agent has no dedicated token yet
+  if (!token) {
+    token = String(process.env.DOGRAH_EMBED_TOKEN || '').trim();
+  }
+
   const base = String(process.env.DOGRAH_BASE_URL || '').replace(/\/$/, '');
   if (!token || !base) {
     const error = new Error('realtime voice session is not configured');

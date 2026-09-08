@@ -34,8 +34,12 @@ CREATE TABLE IF NOT EXISTS agents (
   telephony JSONB DEFAULT '{}',
   preset_id TEXT,
   dograh_workflow_id INTEGER,
+  dograh_embed_token TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+CREATE INDEX IF NOT EXISTS idx_agents_dograh_wf ON agents(dograh_workflow_id);
+CREATE INDEX IF NOT EXISTS idx_agents_dograh_token ON agents(dograh_embed_token);
 
 CREATE TABLE IF NOT EXISTS tenant_call_routing (
   id TEXT PRIMARY KEY,
