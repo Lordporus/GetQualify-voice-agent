@@ -76,9 +76,17 @@ async function query(text, params = []) {
   try {
     const res = await pool.query(text, params);
     if (process.env.NODE_ENV !== 'production') {
-      console.log('[db]', text.slice(0, 80), { ms: Date.now() - start, rows: res.rowCount });
+      console.log('[db]', text.slice(0, 80), { ms: Date.now() - start, rows: Array.isArray(res) ? res.length : res.rowCount });
     }
-    res.rows = res.rows.map(camelize);
+    if (Array.isArray(res)) {
+      res.forEach((r) => {
+        if (r && Array.isArray(r.rows)) r.rows = r.rows.map(camelize);
+      });
+      return res[res.length - 1];
+    }
+    if (res && Array.isArray(res.rows)) {
+      res.rows = res.rows.map(camelize);
+    }
     return res;
   } catch (err) {
     console.error('[db] query error:', { text: text.slice(0, 120), err: err.message });
