@@ -54,8 +54,8 @@ async function main() {
       persona: row.persona,
       greeting: row.greeting,
       tts: row.tts,
-      dograhWorkflowId: isForce ? null : row.dograh_workflow_id,
-      dograhEmbedToken: isForce ? null : row.dograh_embed_token,
+      dograhWorkflowId: isForce ? null : (row.dograhWorkflowId || row.dograh_workflow_id),
+      dograhEmbedToken: isForce ? null : (row.dograhEmbedToken || row.dograh_embed_token),
     };
 
     console.log(`\nSyncing Agent [${agent.id}] "${agent.name}"...`);

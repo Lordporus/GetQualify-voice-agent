@@ -1659,14 +1659,14 @@ async function apiCrmAnalytics(req, res, ctx) {
       db.query(`SELECT AVG(EXTRACT(EPOCH FROM (pipeline_updated_at - created_at))/3600) AS avg_hours FROM leads WHERE tenant_id=$1 AND pipeline_stage='won' AND pipeline_updated_at IS NOT NULL`, [ctx.tenant.id]),
     ]);
     const total = stageRes.rows.reduce((sum, r) => sum + parseInt(r.count, 10), 0);
-    const won = (stageRes.rows.find((r) => r.pipeline_stage === 'won') || {}).count || 0;
-    const nonNew = stageRes.rows.filter((r) => r.pipeline_stage !== 'new').reduce((sum, r) => sum + parseInt(r.count, 10), 0);
+    const won = (stageRes.rows.find((r) => (r.pipelineStage || r.pipeline_stage) === 'won') || {}).count || 0;
+    const nonNew = stageRes.rows.filter((r) => (r.pipelineStage || r.pipeline_stage) !== 'new').reduce((sum, r) => sum + parseInt(r.count, 10), 0);
     return core.sendJson(res, 200, {
       totalLeads: total,
-      byStage: Object.fromEntries(stageRes.rows.map((r) => [r.pipeline_stage, { count: parseInt(r.count, 10), totalValuePaise: parseInt(r.total_value, 10) }])),
+      byStage: Object.fromEntries(stageRes.rows.map((r) => [r.pipelineStage || r.pipeline_stage, { count: parseInt(r.count, 10), totalValuePaise: parseInt(r.totalValuePaise || r.total_value || 0, 10) }])),
       conversionRate: nonNew > 0 ? Math.round((parseInt(won, 10) / nonNew) * 10000) / 100 : 0,
-      avgTimeToWonHours: wonTimeRes.rows[0]?.avg_hours ? Math.round(parseFloat(wonTimeRes.rows[0].avg_hours) * 10) / 10 : null,
-      topAssignees: assigneeRes.rows.map((r) => ({ assignedTo: r.assigned_to, count: parseInt(r.count, 10) })),
+      avgTimeToWonHours: (wonTimeRes.rows[0]?.avgHours || wonTimeRes.rows[0]?.avg_hours) ? Math.round(parseFloat(wonTimeRes.rows[0].avgHours || wonTimeRes.rows[0].avg_hours) * 10) / 10 : null,
+      topAssignees: assigneeRes.rows.map((r) => ({ assignedTo: r.assignedTo || r.assigned_to, count: parseInt(r.count, 10) })),
       bySource: Object.fromEntries(sourceRes.rows.map((r) => [r.source, parseInt(r.count, 10)])),
       monthlyTrend: monthRes.rows.map((r) => ({ month: r.month, count: parseInt(r.count, 10) })),
     });
@@ -2033,7 +2033,7 @@ async function mintDograhVoiceSession(req, context) {
     if (db.isPostgres) {
       const aRes = await db.query('SELECT dograh_embed_token, dograh_workflow_id FROM agents WHERE id = $1', [agentId]).catch(() => ({ rows: [] }));
       if (aRes.rows && aRes.rows.length > 0) {
-        token = String(aRes.rows[0].dograh_embed_token || '').trim();
+        token = String(aRes.rows[0].dograhEmbedToken || aRes.rows[0].dograh_embed_token || '').trim();
       }
     } else {
       const agent = (core.db().agents || []).find((a) => a.id === agentId);
@@ -2193,7 +2193,7 @@ async function apiDemoLinksRevoke(req, res, ctx) {
     if (lRes.rowCount === 0) return core.sendJson(res, 404, { error: 'demo link not found', code: 'not_found' });
     await db.transaction(async (client) => {
       await client.query('UPDATE demo_links SET status = $1, revoked_at = $2, revoked_by = $3 WHERE id = $4', ['revoked', new Date().toISOString(), ctx.user.id, id]);
-      await db.addAuditSql(client, ctx, 'demo_link.revoked', 'demo_link', id, { agentId: lRes.rows[0].agent_id });
+      await db.addAuditSql(client, ctx, 'demo_link.revoked', 'demo_link', id, { agentId: lRes.rows[0].agentId || lRes.rows[0].agent_id });
     });
   } else {
     const link = core.db().demoLinks.find((item) => item.id === id && item.tenantId === ctx.tenant.id);
