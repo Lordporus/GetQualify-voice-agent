@@ -2857,8 +2857,8 @@ function paintRouting(host, data) {
   const phoneNumber = routing.phoneNumber || '+918065354620';
 
   const head = el('div', { style: 'margin-bottom:14px' }, [
-    el('h3', { class: 't-h3' }, 'Call Routing'),
-    el('p', { class: 'muted', style: 'font-size:.85rem;margin-top:2px' }, 'Manage which AI agent represents your organization on inbound and outbound calls.')
+    el('h3', { class: 't-h3' }, 'Outbound Call Routing'),
+    el('p', { class: 'muted', style: 'font-size:.85rem;margin-top:2px' }, 'Manage which AI agent represents your organization when placing outbound calls. Inbound routing is managed in the active voice line card above.')
   ]);
 
   if (availableAgents.length === 0) {
@@ -2866,24 +2866,6 @@ function paintRouting(host, data) {
     host.appendChild(el('div', { class: 'muted' }, 'No agents configured. Create an agent first in the Agents tab.'));
     return;
   }
-
-  // Inbound agent dropdown
-  const inSel = el('select', { class: 'select', id: 'routing_inbound_agent' },
-    availableAgents.map((a) => {
-      const tag = a.telephonyReady ? ` (Workflow #${a.dograhWorkflowId})` : ' (Web-only, no phone workflow)';
-      const label = (a.name || 'Agent') + tag;
-      const isSel = a.id === routing.inboundAgentId;
-      return el('option', { value: a.id, selected: isSel ? 'selected' : false }, label);
-    })
-  );
-  if (routing.inboundAgentId) inSel.value = routing.inboundAgentId;
-
-  const inStatus = el('div', { class: 'muted', style: 'font-size:.8rem;margin-top:6px' });
-  const inField = el('div', { class: 'field' }, [
-    el('label', { for: 'routing_inbound_agent' }, `Inbound Agent (Answers calls to ${phoneNumber})`),
-    inSel,
-    inStatus
-  ]);
 
   // Outbound agent dropdown
   const outSel = el('select', { class: 'select', id: 'routing_outbound_agent' },
@@ -2897,26 +2879,17 @@ function paintRouting(host, data) {
   if (routing.outboundAgentId) outSel.value = routing.outboundAgentId;
 
   const outStatus = el('div', { class: 'muted', style: 'font-size:.8rem;margin-top:6px' });
-  const outField = el('div', { class: 'field', style: 'margin-top:12px' }, [
+  const outField = el('div', { class: 'field' }, [
     el('label', { for: 'routing_outbound_agent' }, 'Outbound Agent (Speaks when placing calls)'),
     outSel,
     outStatus
   ]);
 
   const warnBox = el('div', { class: 'danger-note', style: 'margin-top:10px;display:none' });
-  const saveBtn = el('button', { class: 'btn btn-primary', style: 'margin-top:12px;width:100%' }, 'Save Routing Changes');
+  const saveBtn = el('button', { class: 'btn btn-primary', style: 'margin-top:12px;width:100%' }, 'Save Outbound Agent');
 
   function updateValidation() {
-    const inAgent = availableAgents.find((a) => a.id === inSel.value);
     const outAgent = availableAgents.find((a) => a.id === outSel.value);
-
-    if (inAgent) {
-      if (inAgent.telephonyReady) {
-        inStatus.innerHTML = `🟢 <span style="color:var(--ink)">Live Inbound:</span> ${esc(inAgent.name)} is active on ${esc(phoneNumber)}`;
-      } else {
-        inStatus.innerHTML = `⚠️ <span style="color:var(--warn, #f59e0b)">Not telephony ready:</span> ${esc(inAgent.name)} does not have a linked phone workflow`;
-      }
-    }
 
     if (outAgent) {
       if (outAgent.telephonyReady) {
@@ -2926,16 +2899,12 @@ function paintRouting(host, data) {
       }
     }
 
-    const inOk = inAgent && inAgent.telephonyReady;
     const outOk = outAgent && outAgent.telephonyReady;
 
-    if (!inOk || !outOk) {
+    if (!outOk) {
       saveBtn.disabled = true;
       warnBox.style.display = 'block';
-      const unmapped = [];
-      if (!inOk && inAgent) unmapped.push(`Inbound (${inAgent.name})`);
-      if (!outOk && outAgent) unmapped.push(`Outbound (${outAgent.name})`);
-      warnBox.innerHTML = `<b>Cannot save routing:</b> ${esc(unmapped.join(' and '))} is web-only and not linked to a telephony workflow. Please select a telephony-ready agent (e.g. Payal).`;
+      warnBox.innerHTML = `<b>Cannot save routing:</b> Outbound agent (${esc(outAgent ? outAgent.name : 'Unknown')}) is web-only and not linked to a telephony workflow. Please select a telephony-ready agent (e.g. Payal).`;
     } else {
       saveBtn.disabled = false;
       warnBox.style.display = 'none';
@@ -2943,15 +2912,13 @@ function paintRouting(host, data) {
     }
   }
 
-  inSel.addEventListener('change', updateValidation);
   outSel.addEventListener('change', updateValidation);
   updateValidation();
 
   saveBtn.addEventListener('click', async (e) => {
     e.preventDefault();
-    const inAgent = availableAgents.find((a) => a.id === inSel.value);
     const outAgent = availableAgents.find((a) => a.id === outSel.value);
-    if (!inAgent || !inAgent.telephonyReady || !outAgent || !outAgent.telephonyReady) return;
+    if (!outAgent || !outAgent.telephonyReady) return;
 
     saveBtn.disabled = true;
     saveBtn.textContent = 'Saving...';
@@ -2959,36 +2926,30 @@ function paintRouting(host, data) {
       await api('/api/routing/update', {
         method: 'POST',
         body: {
-          inboundAgentId: inSel.value,
+          inboundAgentId: routing.inboundAgentId || outSel.value,
           outboundAgentId: outSel.value,
           phoneNumber,
         }
       });
-      const inName = inAgent.name.split(' - ')[0] || inAgent.name;
-      toast(`Call routing updated. Incoming calls now route to ${inName}.`, 'ok');
+      const outName = outAgent.name.split(' - ')[0] || outAgent.name;
+      toast(`Outbound routing updated. Outbound calls now use ${outName}.`, 'ok');
       State.loaded.routing = false;
       try {
         const s = await ensureTelephony(true);
         const statusHost = $('#telStatus');
         if (statusHost) paintTelephony(statusHost, s);
-        const hero = $('#inboundHeroHost');
-        if (hero) {
-          const freshRouting = await ensureRouting(true);
-          paintInboundHero(hero, freshRouting, s);
-        }
       } catch (_) {}
     } catch (err) {
-      toast(err.message || 'Failed to update call routing.', 'err');
+      toast(err.message || 'Failed to update outbound routing.', 'err');
     } finally {
       saveBtn.disabled = false;
-      saveBtn.textContent = 'Save Routing Changes';
+      saveBtn.textContent = 'Save Outbound Agent';
       updateValidation();
     }
   });
 
   const form = el('form', { class: 'routing-form', onsubmit: (e) => e.preventDefault() }, [
     head,
-    inField,
     outField,
     warnBox,
     saveBtn
