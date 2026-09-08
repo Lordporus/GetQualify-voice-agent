@@ -967,6 +967,8 @@ function refillDidOptions(scope) {
     numbers.forEach((n) => sel.appendChild(el('option', { value: n }, n)));
     if (cur) sel.value = cur;
   });
+}
+
 function compileStructuredPersona(cfg) {
   if (!cfg || typeof cfg !== 'object') return '';
   const sections = [];
