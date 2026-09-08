@@ -935,16 +935,61 @@ async function ensureRouting(force) {
 async function viewAgents(root) {
   root.appendChild(viewHead('Agents', 'Each agent is a persona plus a voice. Preview the voice, then assign a number and ship it.'));
 
+  const formWrapper = el('div', { id: 'builderWrapper', style: 'margin-bottom:20px;' });
   const builder = buildAgentForm(null);
-  root.appendChild(builder);
+  formWrapper.appendChild(builder);
 
-  const gridHost = el('div', { id: 'agentsGrid', class: 'agents-grid', style: 'margin-top:22px' }, skeleton('sk-card', 3));
+  const hasExistingAgents = (State.agents && State.agents.length > 0);
+  let formOpen = !hasExistingAgents;
+  formWrapper.style.display = formOpen ? '' : 'none';
+
+  const toggleBtn = el('button', {
+    class: formOpen ? 'btn btn-ghost' : 'btn btn-primary',
+    id: 'btnToggleBuilder',
+    style: 'display:inline-flex;align-items:center;gap:6px;'
+  }, formOpen ? '✕ Close Builder' : '＋ Create New Agent');
+
+  toggleBtn.onclick = () => {
+    formOpen = !formOpen;
+    formWrapper.style.display = formOpen ? '' : 'none';
+    toggleBtn.textContent = formOpen ? '✕ Close Builder' : '＋ Create New Agent';
+    toggleBtn.className = formOpen ? 'btn btn-ghost' : 'btn btn-primary';
+    if (formOpen) {
+      formWrapper.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  builder._onCreated = () => {
+    formOpen = false;
+    formWrapper.style.display = 'none';
+    toggleBtn.textContent = '＋ Create New Agent';
+    toggleBtn.className = 'btn btn-primary';
+    paintAgents();
+    const gridHost = $('#agentsGrid');
+    if (gridHost) {
+      gridHost.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
+  const countLabel = el('div', { id: 'agentCountLabel', class: 'muted', style: 'font-size:13px;' }, hasExistingAgents ? `${State.agents.length} active agent${State.agents.length === 1 ? '' : 's'}` : 'Get started by creating your first voice agent.');
+  const topBar = el('div', { class: 'agent-create-banner', style: 'display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;' }, [
+    countLabel,
+    toggleBtn
+  ]);
+
+  root.appendChild(topBar);
+  root.appendChild(formWrapper);
+
+  const gridHost = el('div', { id: 'agentsGrid', class: 'agents-grid', style: 'margin-top:8px' }, skeleton('sk-card', 3));
   root.appendChild(gridHost);
 
   try {
     await Promise.all([ensureAgents(true), ensureTelephony().catch(() => null), ensureProviders().catch(() => null)]);
     refillDidOptions();
     paintAgents();
+    if (countLabel && State.agents) {
+      countLabel.textContent = `${State.agents.length} active agent${State.agents.length === 1 ? '' : 's'}`;
+    }
   } catch (e) {
     gridHost.innerHTML = '';
     gridHost.appendChild(el('div', { class: 'empty muted' }, 'Could not load agents. ' + esc(e.message)));
@@ -1138,12 +1183,8 @@ function buildAgentForm(existing) {
     f0: tts.f0_up_key != null ? tts.f0_up_key : 0
   };
 
-  const rawCfg = e.templateConfig || e.template_config || null;
-  let structuredConfig = rawCfg ? JSON.parse(JSON.stringify(rawCfg)) : defaultStructuredAgentConfig('salon');
-  let builderMode = (existing && !rawCfg) ? 'raw' : 'guided';
-
   const nameI = el('input', { class: 'input', id: 'f_name', type: 'text', value: e.name || '', placeholder: 'Front Desk', maxlength: 80 });
-  const personaI = el('textarea', { class: 'textarea', id: 'f_persona', rows: 5, placeholder: 'You are a warm, sharp receptionist. Answer in 1 to 2 short spoken sentences, qualify the lead, and book a callback.' }, e.persona || '');
+  const personaI = el('textarea', { class: 'textarea', id: 'f_persona', rows: 6, placeholder: 'You are a warm, sharp receptionist. Answer in 1 to 2 short spoken sentences, qualify the lead, and book a callback.' }, e.persona || '');
   const greetI = el('input', { class: 'input', id: 'f_greeting', type: 'text', value: e.greeting || '', placeholder: 'Hi, thanks for calling GetQualify. How can I help today.', maxlength: 240 });
   const descI = el('input', { class: 'input', id: 'f_desc', type: 'text', value: (tts.description || ''), placeholder: 'Optional voice direction, e.g. calm and confident' });
 
@@ -1195,320 +1236,12 @@ function buildAgentForm(existing) {
     toneField.style.display = isMul ? 'none' : '';
   }
 
-  // ─── ACCORDION & GUIDED BUILDER STATE & UI ─────────────────────────────
-  function makeAccordionItem(title, badge, bodyEl, isOpenDefault = false) {
-    const item = el('div', { class: 'builder-acc-item' + (isOpenDefault ? ' is-open' : '') });
-    const header = el('button', { type: 'button', class: 'builder-acc-header' }, [
-      el('div', { class: 'builder-acc-header-left' }, [
-        el('span', {}, title),
-        badge ? el('span', { class: 'builder-acc-badge' }, badge) : null
-      ]),
-      el('span', { class: 'builder-acc-chevron' }, '▼')
-    ]);
-    header.onclick = (ev) => {
-      ev.preventDefault();
-      item.classList.toggle('is-open');
-    };
-    const body = el('div', { class: 'builder-acc-body' }, [bodyEl]);
-    item.appendChild(header);
-    item.appendChild(body);
-    return item;
-  }
-
-  const promptPreviewEl = el('pre', { class: 'compiled-prompt-preview' }, '');
-  function updatePreview() {
-    const compiled = compileStructuredPersona(structuredConfig);
-    promptPreviewEl.textContent = compiled || '(Empty persona prompt)';
-    if (builderMode === 'guided') {
-      personaI.value = compiled;
-    }
-  }
-
-  // 1. Identity & Voice Rules
-  const roleNameI = el('input', { class: 'input', type: 'text', value: structuredConfig.identity?.roleName || '', placeholder: 'Payal, Front Desk Receptionist' });
-  const bizNameI = el('input', { class: 'input', type: 'text', value: structuredConfig.identity?.businessName || '', placeholder: 'Envy Salon & Spa' });
-  const bizTypeI = el('input', { class: 'input', type: 'text', value: structuredConfig.identity?.businessType || '', placeholder: 'Hair, Skin & Beauty Salon' });
-  const langMixI = el('input', { class: 'input', type: 'text', value: structuredConfig.identity?.languageMix || '', placeholder: 'Warm, conversational Hindi-English (Hinglish) mix' });
-
-  roleNameI.oninput = () => { structuredConfig.identity.roleName = roleNameI.value; updatePreview(); };
-  bizNameI.oninput = () => { structuredConfig.identity.businessName = bizNameI.value; updatePreview(); };
-  bizTypeI.oninput = () => { structuredConfig.identity.businessType = bizTypeI.value; updatePreview(); };
-  langMixI.oninput = () => { structuredConfig.identity.languageMix = langMixI.value; updatePreview(); };
-
-  const rulesListEl = el('div', { class: 'builder-items-list' });
-  function renderRules() {
-    rulesListEl.innerHTML = '';
-    (structuredConfig.rules || []).forEach((r, idx) => {
-      const rInput = el('input', { class: 'input', type: 'text', value: r, placeholder: 'Voice rule...' });
-      rInput.oninput = () => { structuredConfig.rules[idx] = rInput.value; updatePreview(); };
-      const delBtn = el('button', { type: 'button', class: 'builder-btn-icon-danger', title: 'Delete rule' }, '🗑️');
-      delBtn.onclick = () => { structuredConfig.rules.splice(idx, 1); renderRules(); updatePreview(); };
-      rulesListEl.appendChild(el('div', { class: 'flex gap-2 items-center' }, [rInput, delBtn]));
-    });
-  }
-  const addRuleBtn = el('button', { type: 'button', class: 'builder-btn-add' }, '+ Add Voice Rule');
-  addRuleBtn.onclick = () => {
-    structuredConfig.rules = structuredConfig.rules || [];
-    structuredConfig.rules.push('');
-    renderRules();
-    updatePreview();
-  };
-  renderRules();
-
-  const sec1Body = el('div', { class: 'flex flex-col gap-3' }, [
-    el('div', { class: 'form-grid' }, [
-      field('Role Name / Persona Title', roleNameI),
-      field('Business Name', bizNameI),
-      field('Business Category / Industry', bizTypeI),
-      field('Speaking Style / Language Mix', langMixI)
-    ]),
-    el('div', { style: 'margin-top:8px' }, [
-      el('div', { style: 'font-weight:600;font-size:12px;margin-bottom:6px;color:var(--ink)' }, 'Turn-by-Turn Voice Rules:'),
-      rulesListEl,
-      addRuleBtn
-    ])
-  ]);
-
-  // 2. Conversation Stages
-  const stagesListEl = el('div', { class: 'builder-items-list' });
-  function renderStages() {
-    stagesListEl.innerHTML = '';
-    (structuredConfig.stages || []).forEach((st, idx) => {
-      const nameIn = el('input', { class: 'input', type: 'text', value: st.name || '', placeholder: 'Stage Name (e.g. Booking)' });
-      const goalIn = el('input', { class: 'input', type: 'text', value: st.goal || '', placeholder: 'Stage Goal (e.g. Find preferred time)' });
-      const dataIn = el('input', { class: 'input', type: 'text', value: (st.requiredData || []).join(', '), placeholder: 'Data to capture (e.g. caller_name, service)' });
-
-      nameIn.oninput = () => { st.name = nameIn.value; updatePreview(); };
-      goalIn.oninput = () => { st.goal = goalIn.value; updatePreview(); };
-      dataIn.oninput = () => {
-        st.requiredData = dataIn.value.split(',').map((x) => x.trim()).filter(Boolean);
-        updatePreview();
-      };
-
-      const delBtn = el('button', { type: 'button', class: 'builder-btn-icon-danger', title: 'Delete stage' }, '🗑️');
-      delBtn.onclick = () => { structuredConfig.stages.splice(idx, 1); renderStages(); updatePreview(); };
-
-      const row = el('div', { class: 'builder-card-row' }, [
-        el('div', { class: 'builder-row-fields' }, [
-          field('Stage ' + (idx + 1) + ' Name', nameIn),
-          field('Required Data Keys', dataIn),
-          (function() { const f = field('Stage Goal', goalIn); f.classList.add('builder-row-full'); return f; })()
-        ]),
-        delBtn
-      ]);
-      stagesListEl.appendChild(row);
-    });
-  }
-  const addStageBtn = el('button', { type: 'button', class: 'builder-btn-add' }, '+ Add Conversation Stage');
-  addStageBtn.onclick = () => {
-    structuredConfig.stages = structuredConfig.stages || [];
-    structuredConfig.stages.push({ id: 'stage_' + (structuredConfig.stages.length + 1), name: '', goal: '', requiredData: [] });
-    renderStages();
-    updatePreview();
-  };
-  renderStages();
-
-  const sec2Body = el('div', { class: 'flex flex-col gap-3' }, [
-    stagesListEl,
-    addStageBtn
-  ]);
-
-  // 3. Data to Capture
-  const dataListEl = el('div', { class: 'builder-items-list' });
-  function renderDataSchema() {
-    dataListEl.innerHTML = '';
-    (structuredConfig.dataSchema || []).forEach((ds, idx) => {
-      const lblIn = el('input', { class: 'input', type: 'text', value: ds.label || '', placeholder: 'Field Label (e.g. Customer Name)' });
-      const keyIn = el('input', { class: 'input', type: 'text', value: ds.fieldKey || '', placeholder: 'Key (e.g. caller_name)' });
-      const descIn = el('input', { class: 'input', type: 'text', value: ds.description || '', placeholder: 'Description for extraction' });
-      const reqCb = el('input', { type: 'checkbox', checked: !!ds.required });
-
-      lblIn.oninput = () => { ds.label = lblIn.value; updatePreview(); };
-      keyIn.oninput = () => { ds.fieldKey = keyIn.value; updatePreview(); };
-      descIn.oninput = () => { ds.description = descIn.value; updatePreview(); };
-      reqCb.onchange = () => { ds.required = reqCb.checked; updatePreview(); };
-
-      const reqLabel = el('label', { class: 'flex items-center gap-1', style: 'font-size:12px;font-weight:600;cursor:pointer' }, [reqCb, el('span', {}, 'Required')]);
-      const delBtn = el('button', { type: 'button', class: 'builder-btn-icon-danger', title: 'Delete field' }, '🗑️');
-      delBtn.onclick = () => { structuredConfig.dataSchema.splice(idx, 1); renderDataSchema(); updatePreview(); };
-
-      const row = el('div', { class: 'builder-card-row' }, [
-        el('div', { class: 'builder-row-fields' }, [
-          field('Field Label', lblIn),
-          field('Key (JSON parameter)', keyIn),
-          field('Description', descIn),
-          field('Validation', reqLabel)
-        ]),
-        delBtn
-      ]);
-      dataListEl.appendChild(row);
-    });
-  }
-  const addDataBtn = el('button', { type: 'button', class: 'builder-btn-add' }, '+ Add Data Field');
-  addDataBtn.onclick = () => {
-    structuredConfig.dataSchema = structuredConfig.dataSchema || [];
-    structuredConfig.dataSchema.push({ fieldKey: '', label: '', required: true, description: '' });
-    renderDataSchema();
-    updatePreview();
-  };
-  renderDataSchema();
-
-  const sec3Body = el('div', { class: 'flex flex-col gap-3' }, [
-    dataListEl,
-    addDataBtn
-  ]);
-
-  // 4. Objection Handling
-  const objListEl = el('div', { class: 'builder-items-list' });
-  function renderObjections() {
-    objListEl.innerHTML = '';
-    (structuredConfig.objections || []).forEach((ob, idx) => {
-      const trigIn = el('input', { class: 'input', type: 'text', value: ob.trigger || '', placeholder: 'Customer pushback (e.g. Price is too high)' });
-      const respIn = el('input', { class: 'input', type: 'text', value: ob.response || '', placeholder: 'Agent counter-response (e.g. Offer 15% first-time discount)' });
-
-      trigIn.oninput = () => { ob.trigger = trigIn.value; updatePreview(); };
-      respIn.oninput = () => { ob.response = respIn.value; updatePreview(); };
-
-      const delBtn = el('button', { type: 'button', class: 'builder-btn-icon-danger', title: 'Delete objection' }, '🗑️');
-      delBtn.onclick = () => { structuredConfig.objections.splice(idx, 1); renderObjections(); updatePreview(); };
-
-      const row = el('div', { class: 'builder-card-row' }, [
-        el('div', { class: 'builder-row-fields' }, [
-          field('Customer Objection / Trigger', trigIn),
-          field('Agent Counter-Response', respIn)
-        ]),
-        delBtn
-      ]);
-      objListEl.appendChild(row);
-    });
-  }
-  const addObjBtn = el('button', { type: 'button', class: 'builder-btn-add' }, '+ Add Objection Scenario');
-  addObjBtn.onclick = () => {
-    structuredConfig.objections = structuredConfig.objections || [];
-    structuredConfig.objections.push({ trigger: '', response: '' });
-    renderObjections();
-    updatePreview();
-  };
-  renderObjections();
-
-  const sec4Body = el('div', { class: 'flex flex-col gap-3' }, [
-    objListEl,
-    addObjBtn
-  ]);
-
-  // 5. Strict Guardrails
-  const guardsListEl = el('div', { class: 'builder-items-list' });
-  function renderGuardrails() {
-    guardsListEl.innerHTML = '';
-    (structuredConfig.guardrails || []).forEach((g, idx) => {
-      const gIn = el('input', { class: 'input', type: 'text', value: g, placeholder: 'Safety prohibition / rule...' });
-      gIn.oninput = () => { structuredConfig.guardrails[idx] = gIn.value; updatePreview(); };
-      const delBtn = el('button', { type: 'button', class: 'builder-btn-icon-danger', title: 'Delete rule' }, '🗑️');
-      delBtn.onclick = () => { structuredConfig.guardrails.splice(idx, 1); renderGuardrails(); updatePreview(); };
-      guardsListEl.appendChild(el('div', { class: 'flex gap-2 items-center' }, [gIn, delBtn]));
-    });
-  }
-  const addGuardBtn = el('button', { type: 'button', class: 'builder-btn-add' }, '+ Add Safety Guardrail');
-  addGuardBtn.onclick = () => {
-    structuredConfig.guardrails = structuredConfig.guardrails || [];
-    structuredConfig.guardrails.push('');
-    renderGuardrails();
-    updatePreview();
-  };
-  renderGuardrails();
-
-  const sec5Body = el('div', { class: 'flex flex-col gap-3' }, [
-    guardsListEl,
-    addGuardBtn
-  ]);
-
-  // 6. Dialogue Sample & Live Preview
-  const exampleDialogI = el('textarea', { class: 'textarea', rows: 4, placeholder: 'Caller: Kitna time lagega?\nAgent: Haircut mein 30 minutes lagenge sir.' }, structuredConfig.exampleDialog || '');
-  exampleDialogI.oninput = () => { structuredConfig.exampleDialog = exampleDialogI.value; updatePreview(); };
-
-  const sec6Body = el('div', { class: 'flex flex-col gap-3' }, [
-    field('Multi-turn Realistic Example Dialogue', exampleDialogI),
-    el('div', { style: 'margin-top:8px' }, [
-      el('div', { style: 'font-weight:600;font-size:12px;margin-bottom:4px;color:var(--ink-soft)' }, 'Live Compiled System Prompt Preview:'),
-      promptPreviewEl
-    ])
-  ]);
-
-  function syncAllAccordionInputs() {
-    roleNameI.value = structuredConfig.identity?.roleName || '';
-    bizNameI.value = structuredConfig.identity?.businessName || '';
-    bizTypeI.value = structuredConfig.identity?.businessType || '';
-    langMixI.value = structuredConfig.identity?.languageMix || '';
-    exampleDialogI.value = structuredConfig.exampleDialog || '';
-    renderRules();
-    renderStages();
-    renderDataSchema();
-    renderObjections();
-    renderGuardrails();
-    updatePreview();
-  }
-
-  // Accordion Wrapper
-  const accordionContainer = el('div', { class: 'builder-accordion full' }, [
-    makeAccordionItem('Section 1: Identity, Brand & Voice Rules', 'Identity', sec1Body, true),
-    makeAccordionItem('Section 2: Conversation Stages (State Machine)', 'Stages', sec2Body, false),
-    makeAccordionItem('Section 3: Data to Capture (Lead Schema)', 'Data', sec3Body, false),
-    makeAccordionItem('Section 4: Objection Handling Matrix', 'Objections', sec4Body, false),
-    makeAccordionItem('Section 5: Strict Safety Guardrails', 'Guardrails', sec5Body, false),
-    makeAccordionItem('Section 6: Multi-turn Example & Live Prompt Preview', 'Preview', sec6Body, true)
-  ]);
-
-  // Raw Prompt Container
-  const rawContainer = (function() {
-    const f = field('Persona (System Prompt)', personaI);
-    f.classList.add('full');
-    return f;
-  })();
-
-  // Mode Switcher Bar
-  const modeBar = el('div', { class: 'builder-mode-toggle-bar full' }, [
-    el('div', { class: 'builder-mode-label' }, 'Agent Persona Builder:'),
-    el('div', { class: 'seg', id: existing ? 'f_mode_seg_modal' : 'f_mode_seg' }, [
-      el('button', {
-        type: 'button',
-        class: builderMode === 'guided' ? 'on' : '',
-        onclick: () => setMode('guided')
-      }, '🪄 Guided Builder (Recommended)'),
-      el('button', {
-        type: 'button',
-        class: builderMode === 'raw' ? 'on' : '',
-        onclick: () => setMode('raw')
-      }, '📝 Raw Prompt')
-    ])
-  ]);
-
-  function setMode(mode) {
-    builderMode = mode;
-    $$('.builder-mode-toggle-bar .seg button', card).forEach((b, idx) => {
-      b.classList.toggle('on', (mode === 'guided' && idx === 0) || (mode === 'raw' && idx === 1));
-    });
-    if (mode === 'guided') {
-      accordionContainer.style.display = '';
-      rawContainer.style.display = 'none';
-      updatePreview();
-    } else {
-      accordionContainer.style.display = 'none';
-      rawContainer.style.display = '';
-      personaI.value = compileStructuredPersona(structuredConfig) || personaI.value;
-    }
-  }
-
-  setMode(builderMode);
-  updatePreview();
-
   const submitBtn = el('button', { class: 'btn btn-primary' }, existing ? 'Save changes' : 'Create agent');
   const form = el('form', { onsubmit: onSave }, [
     el('div', { class: 'form-grid' }, [
       field('Agent name', nameI),
       field('Assigned number', didSel),
-      modeBar,
-      accordionContainer,
-      rawContainer,
+      (function () { const f = field('Persona (System Prompt)', personaI); f.classList.add('full'); return f; })(),
       (function () { const f = field('Greeting', greetI); f.classList.add('full'); return f; })(),
       field('Voice model', modelSeg),
       pitchField,
@@ -1536,51 +1269,16 @@ function buildAgentForm(existing) {
           type: 'button',
           class: 'btn btn-sm btn-primary',
           style: 'background:#ca8a04;border-color:#ca8a04;color:#fff',
-          onclick: () => choosePayalTemplateModal(nameI, personaI, greetI, descI, (newConfig) => {
-            if (newConfig) {
-              structuredConfig = JSON.parse(JSON.stringify(newConfig));
-              syncAllAccordionInputs();
-              setMode('guided');
-            }
-          })
+          onclick: () => choosePayalTemplateModal(nameI, personaI, greetI, descI)
         }, '🇮🇳 Payal Receptionist (Indian Market)'),
         el('button', {
           type: 'button',
           class: 'btn btn-sm btn-ghost',
           onclick: () => {
             nameI.value = 'Ria Receptionist';
+            personaI.value = 'You are Ria, the AI voice agent for GetQualify. You are on a live phone call in English.\n\n- ONE or TWO short sentences per turn.\n- Plain spoken English.\n- Warm, quick, confident.';
             greetI.value = 'Hi, thanks for calling GetQualify. How can I help today?';
             descI.value = 'Sharp, confident, friendly receptionist';
-            structuredConfig = {
-              version: 2,
-              identity: {
-                roleName: 'Ria, Voice Agent',
-                businessName: 'GetQualify',
-                businessType: 'Voice AI Infrastructure',
-                languageMix: 'Plain spoken, confident English'
-              },
-              rules: [
-                'ONE or TWO short sentences per turn',
-                'Warm, quick, confident',
-                'Never ramble or use complex jargon'
-              ],
-              stages: [
-                { id: 'greeting', name: 'Greeting & Qualification', goal: 'Greet warmly and understand their business requirement', requiredData: ['business_type'] },
-                { id: 'demo', name: 'Product Value', goal: 'Explain voice agent features and lead qualification', requiredData: [] },
-                { id: 'callback', name: 'Book Callback', goal: 'Get email and schedule a demo callback', requiredData: ['email', 'caller_name'] }
-              ],
-              dataSchema: [
-                { fieldKey: 'caller_name', label: 'Name', required: true, description: 'Caller name' },
-                { fieldKey: 'email', label: 'Work Email', required: true, description: 'Work email address' }
-              ],
-              objections: [
-                { trigger: 'What does it cost?', response: 'Our plans start with 15 free test minutes, then pay-as-you-go per minute.' }
-              ],
-              guardrails: ['Never promise unsupported integrations', 'Always confirm email address'],
-              exampleDialog: 'Caller: What does GetQualify do?\nRia: We build AI voice receptionists for Indian businesses that answer calls and book clients automatically.'
-            };
-            syncAllAccordionInputs();
-            setMode('guided');
             toast('Applied Ria (Global English) template.', 'ok');
           }
         }, '🌐 Ria (Global English)'),
@@ -1592,17 +1290,6 @@ function buildAgentForm(existing) {
             personaI.value = '';
             greetI.value = '';
             descI.value = '';
-            structuredConfig = {
-              version: 2,
-              identity: { roleName: '', businessName: '', businessType: '', languageMix: '' },
-              rules: ['ONE or TWO short sentences per turn'],
-              stages: [{ id: 'greeting', name: 'Greeting', goal: 'Greet caller politely', requiredData: [] }],
-              dataSchema: [],
-              objections: [],
-              guardrails: ['Always confirm critical information twice'],
-              exampleDialog: ''
-            };
-            syncAllAccordionInputs();
             toast('Reset to blank agent.', 'ok');
           }
         }, '✏️ Blank Agent')
@@ -1621,19 +1308,8 @@ function buildAgentForm(existing) {
   async function onSave(ev) {
     ev.preventDefault();
     const name = nameI.value.trim();
+    const persona = personaI.value.trim();
     if (!name) { toast('Give the agent a name.', 'err'); nameI.focus(); return; }
-
-    let persona = '';
-    let templateConfigPayload = null;
-
-    if (builderMode === 'guided') {
-      persona = compileStructuredPersona(structuredConfig);
-      templateConfigPayload = structuredConfig;
-    } else {
-      persona = personaI.value.trim();
-      templateConfigPayload = rawCfg;
-    }
-
     if (!persona) { toast('Add a persona so the agent knows how to behave.', 'err'); personaI.focus(); return; }
     submitBtn.disabled = true; submitBtn.textContent = existing ? 'Saving...' : 'Creating...';
     const payload = {
@@ -1641,7 +1317,7 @@ function buildAgentForm(existing) {
       persona: persona,
       greeting: greetI.value.trim(),
       did: didSel.value || '',
-      templateConfig: templateConfigPayload,
+      templateConfig: existing ? (existing.templateConfig || existing.template_config || null) : null,
       tts: {
         model: state.model,
         speaker: state.model === 'mulberry' ? state.speaker : undefined,
@@ -1662,8 +1338,10 @@ function buildAgentForm(existing) {
         const res = await api('/api/agents', { method: 'POST', body: payload });
         if (res.agent) State.agents.push(res.agent);
         toast('Agent created.', 'ok');
-        // reset the inline form
         nameI.value = ''; personaI.value = ''; greetI.value = ''; descI.value = ''; didSel.value = '';
+        if (typeof card._onCreated === 'function') {
+          card._onCreated(res.agent);
+        }
       }
       paintAgents();
     } catch (ex) {
@@ -2998,25 +2676,162 @@ function blobToBase64(blob) {
 }
 
 /* ===========================================================================
-   5. TELEPHONY
+   5. TELEPHONY & ROUTING
    =========================================================================== */
 async function viewTelephony(root) {
-  root.appendChild(viewHead('Telephony', 'Your VoBiz numbers and call routing, connected through Dograh. Outbound calls require an explicit confirmation.'));
+  root.appendChild(viewHead('Telephony', 'Your live inbound phone line and voice agent routing. Outbound testing available in advanced controls.'));
 
+  // Top Hero Card for Active Inbound Voice Line
+  const heroHost = el('div', { id: 'inboundHeroHost', style: 'margin-bottom:20px;' }, skeleton('sk-card', 1));
+  root.appendChild(heroHost);
+
+  // Advanced accordion drawer (VoBiz credentials, routing configuration & outbound dial tester)
   const statusHost = el('div', { class: 'card card-pad', id: 'telStatus' }, skeleton('sk-line', 5));
   const routingHost = routingCard();
   const dialHost = el('div', { class: 'card card-pad' }, dialForm());
   const rightCol = el('div', { class: 'tel-right-col', style: 'display:flex;flex-direction:column;gap:18px' }, [routingHost, dialHost]);
-  root.appendChild(el('div', { class: 'tel-grid' }, [statusHost, rightCol]));
+  const advGrid = el('div', { class: 'tel-grid', id: 'advTelGrid', style: 'margin-top:14px;display:none;' }, [statusHost, rightCol]);
+
+  let advOpen = false;
+  const advToggleBtn = el('button', {
+    type: 'button',
+    class: 'btn btn-ghost telephony-advanced-toggle',
+    id: 'btnToggleAdvTelephony',
+    style: 'width:100%;text-align:left;display:flex;justify-content:space-between;align-items:center;padding:12px 16px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);cursor:pointer;'
+  }, [
+    el('span', { style: 'font-weight:600;display:inline-flex;align-items:center;gap:8px;' }, '⚙️ Advanced Telephony & Outbound Tester'),
+    el('span', { id: 'advAccArrow', style: 'font-size:12px;color:var(--muted);' }, '▼ Show Details')
+  ]);
+
+  advToggleBtn.onclick = () => {
+    advOpen = !advOpen;
+    advGrid.style.display = advOpen ? '' : 'none';
+    const arrow = $('#advAccArrow', advToggleBtn);
+    if (arrow) arrow.textContent = advOpen ? '▲ Hide Details' : '▼ Show Details';
+  };
+
+  const advAccordion = el('div', { class: 'telephony-advanced-acc', style: 'margin-top:24px;' }, [
+    advToggleBtn,
+    advGrid
+  ]);
+  root.appendChild(advAccordion);
 
   try {
-    const s = await ensureTelephony(true);
-    paintTelephony(statusHost, s);
-    refreshDialNumbers(s);
+    const [routingData, telData] = await Promise.all([
+      ensureRouting(true),
+      ensureTelephony(true).catch(() => ({}))
+    ]);
+    paintInboundHero(heroHost, routingData, telData);
+    paintTelephony(statusHost, telData);
+    refreshDialNumbers(telData);
   } catch (e) {
-    statusHost.innerHTML = '';
-    statusHost.appendChild(el('div', { class: 'muted' }, 'Could not reach VoBiz through Dograh. ' + esc(e.message)));
+    heroHost.innerHTML = '';
+    heroHost.appendChild(el('div', { class: 'card card-pad muted' }, 'Could not load telephony: ' + esc(e.message)));
   }
+}
+
+function paintInboundHero(host, routingData, telData) {
+  host.innerHTML = '';
+  const routing = (routingData && routingData.routing) || {};
+  const availableAgents = Array.isArray(routingData && routingData.availableAgents) ? routingData.availableAgents : [];
+
+  let phoneNumber = routing.phoneNumber;
+  if (!phoneNumber && telData && Array.isArray(telData.dids) && telData.dids.length) {
+    const d0 = telData.dids[0];
+    phoneNumber = typeof d0 === 'string' ? d0 : (d0.did_number || d0.number || d0.did);
+  }
+  if (!phoneNumber && telData && telData.did) {
+    phoneNumber = telData.did;
+  }
+  if (!phoneNumber) phoneNumber = '+918065355052';
+
+  const currentAgent = availableAgents.find((a) => a.id === routing.inboundAgentId);
+  const agentName = currentAgent ? currentAgent.name : 'Payal - Salon Receptionist';
+
+  const hero = el('div', { class: 'card card-pad inbound-hero-card' }, [
+    el('div', { class: 'inbound-hero-header' }, [
+      el('div', { class: 'inbound-hero-badge-group' }, [
+        el('span', { class: 'badge-ready badge-india', style: 'font-size:13px;padding:4px 10px;' }, [
+          el('span', { class: 'd', style: 'background:#10b981;box-shadow:0 0 8px #10b981;' }),
+          '🟢 Inbound Voice Line Active'
+        ]),
+        el('span', { class: 'pill', style: 'font-size:12px;' }, '24/7 AI Receptionist')
+      ]),
+      el('div', { class: 'inbound-hero-agent-badge' }, [
+        'Live Answering Agent: ',
+        el('b', { style: 'color:var(--ink);' }, agentName)
+      ])
+    ]),
+    el('div', { class: 'inbound-hero-body' }, [
+      el('div', { class: 'inbound-hero-phone-col' }, [
+        el('div', { class: 'inbound-hero-label' }, 'Dedicated Live Inbound Number'),
+        el('div', { class: 'inbound-hero-phone-number' }, phoneNumber),
+        el('div', { class: 'inbound-test-prompt' }, [
+          el('div', { class: 'inbound-test-title' }, '📞 Test Inbound Calling Now:'),
+          el('p', { class: 'inbound-test-desc' }, `Dial ${phoneNumber} from your phone to test the live voice conversation with ${agentName}.`),
+          el('ul', { class: 'inbound-test-bullets' }, [
+            el('li', {}, 'Answers within 2 rings with zero latency'),
+            el('li', {}, 'Converses naturally in Hindi, Hinglish & English'),
+            el('li', {}, 'Automatic intake, qualification & appointment booking')
+          ])
+        ])
+      ]),
+      el('div', { class: 'inbound-hero-switch-col' }, [
+        el('div', { class: 'inbound-switch-title' }, 'Change Answering Agent'),
+        el('p', { class: 'inbound-switch-desc' }, 'Select which AI agent answers incoming calls on this number.'),
+        (function () {
+          const sel = el('select', { class: 'select', id: 'hero_inbound_sel', style: 'width:100%;margin-bottom:12px;' },
+            availableAgents.map((a) => {
+              const tag = a.telephonyReady ? ` (Workflow #${a.dograhWorkflowId})` : ' (Web-only)';
+              return el('option', { value: a.id, selected: a.id === routing.inboundAgentId }, (a.name || 'Agent') + tag);
+            })
+          );
+          if (routing.inboundAgentId) sel.value = routing.inboundAgentId;
+
+          const saveBtn = el('button', {
+            type: 'button',
+            class: 'btn btn-primary',
+            style: 'width:100%;display:flex;justify-content:center;align-items:center;gap:6px;'
+          }, '✓ Save Inbound Agent');
+
+          saveBtn.onclick = async () => {
+            const selectedAgent = availableAgents.find((a) => a.id === sel.value);
+            if (!selectedAgent || !selectedAgent.telephonyReady) {
+              toast('Please select a telephony-ready agent (e.g. Payal) with an active phone workflow.', 'err');
+              return;
+            }
+            saveBtn.disabled = true;
+            saveBtn.textContent = 'Saving...';
+            try {
+              await api('/api/routing/update', {
+                method: 'POST',
+                body: {
+                  inboundAgentId: sel.value,
+                  outboundAgentId: routing.outboundAgentId || sel.value,
+                  phoneNumber: phoneNumber
+                }
+              });
+              toast(`Incoming calls now route to ${selectedAgent.name}.`, 'ok');
+              State.loaded.routing = false;
+              const fresh = await ensureRouting(true);
+              paintInboundHero(host, fresh, telData);
+              const rCard = $('#telRouting');
+              if (rCard) renderRoutingContent(rCard);
+            } catch (err) {
+              toast(err.message || 'Failed to update inbound agent.', 'err');
+            } finally {
+              saveBtn.disabled = false;
+              saveBtn.textContent = '✓ Save Inbound Agent';
+            }
+          };
+
+          return el('div', {}, [sel, saveBtn]);
+        })()
+      ])
+    ])
+  ]);
+
+  host.appendChild(hero);
 }
 
 function routingCard() {
@@ -3156,6 +2971,11 @@ function paintRouting(host, data) {
         const s = await ensureTelephony(true);
         const statusHost = $('#telStatus');
         if (statusHost) paintTelephony(statusHost, s);
+        const hero = $('#inboundHeroHost');
+        if (hero) {
+          const freshRouting = await ensureRouting(true);
+          paintInboundHero(hero, freshRouting, s);
+        }
       } catch (_) {}
     } catch (err) {
       toast(err.message || 'Failed to update call routing.', 'err');
@@ -3278,35 +3098,39 @@ function onDial(numI, btn) {
    =========================================================================== */
 async function viewPresets(root) {
   root.appendChild(viewHead('Agent presets', 'Start with a production-minded intake flow, then customize the voice, instructions, calendar, and your own number.'));
-  const notice = el('div', { class: 'inbound-note', style: 'margin:0 0 14px' }, 'Presets are starting points. Personal Injury does not provide legal advice, and Dental does not diagnose. Review the workflow and consent language before using it live.');
+  const notice = el('div', { class: 'inbound-note', style: 'margin:0 0 14px' }, 'Presets are pre-configured starting points with proven conversational flows. Review instructions and assign your number before taking live calls.');
   
+  // Whitelist exactly 5 core presets (3 Payal Indian market + 2 Global English)
+  const ALLOWED_PRESETS = [
+    'payal-salon', 'payal-clinic', 'payal-restaurant',
+    'lead-qualification', 'customer-support'
+  ];
+
   // Filter pills container
   let currentFilter = 'all';
   const filterRow = el('div', { class: 'preset-filter-row', style: 'display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px' });
-  const host = el('div', { class: 'preset-grid' }, skeleton('sk-card', 6));
+  const host = el('div', { class: 'preset-grid' }, skeleton('sk-card', 5));
   root.appendChild(notice);
   root.appendChild(filterRow);
   root.appendChild(host);
 
   const filters = [
-    { id: 'all', label: 'All Presets' },
+    { id: 'all', label: 'All (5)' },
     { id: 'india', label: '⭐ Indian Market (Payal)' },
-    { id: 'salon', label: '💇 Salon' },
-    { id: 'clinic', label: '🩺 Clinic' },
-    { id: 'hvac', label: '❄️ HVAC' },
-    { id: 'realtor', label: '🏢 Real Estate' },
-    { id: 'restaurant', label: '🍽️ Restaurant' },
-    { id: 'global', label: '🌐 Global / Other' }
+    { id: 'global', label: '🌐 Global English' }
   ];
 
   function renderCards(presets) {
     host.innerHTML = '';
-    const filtered = presets.filter((p) => {
+    const allowed = (presets || []).filter((p) =>
+      ALLOWED_PRESETS.some((k) => (p.slug || '').includes(k) || (p.id || '').includes(k))
+    );
+    const filtered = allowed.filter((p) => {
       const isPayal = p.slug?.includes('payal') || (p.category && p.category.includes('_india'));
       if (currentFilter === 'all') return true;
       if (currentFilter === 'india') return isPayal;
       if (currentFilter === 'global') return !isPayal;
-      return (p.category && p.category.includes(currentFilter)) || (p.slug && p.slug.includes(currentFilter));
+      return true;
     });
 
     filtered.forEach((p) => {

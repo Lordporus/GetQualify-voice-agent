@@ -1545,3 +1545,180 @@
   }
 }
 
+/* ===========================================================================
+   PHASE 10: SIMPLIFIED POST-CREATION UX, INBOUND HERO CARD & ADVANCED TELEPHONY
+   =========================================================================== */
+
+/* Agent creation banner / header action row */
+.agent-create-banner {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  margin-bottom: 16px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+#btnToggleBuilder {
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+/* Inbound Hero Card */
+.inbound-hero-card {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  box-shadow: 0 2px 8px rgba(16, 185, 129, 0.06);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.inbound-hero-card::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  background: linear-gradient(90deg, #10b981 0%, #ca8a04 100%);
+}
+
+.inbound-hero-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.inbound-hero-badge-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.inbound-hero-agent-badge {
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.inbound-hero-body {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  align-items: stretch;
+}
+
+.inbound-hero-label {
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 4px;
+}
+
+.inbound-hero-phone-number {
+  font-size: 26px;
+  font-weight: 700;
+  font-family: var(--font-mono, monospace);
+  letter-spacing: 1px;
+  color: var(--ink);
+  margin-bottom: 12px;
+}
+
+.inbound-test-prompt {
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+}
+
+.inbound-test-title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--ink);
+  margin-bottom: 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.inbound-test-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 8px;
+  line-height: 1.4;
+}
+
+.inbound-test-bullets {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.5;
+}
+
+.inbound-hero-switch-col {
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.02));
+  padding: 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+
+.inbound-switch-title {
+  font-weight: 600;
+  font-size: 14px;
+  color: var(--ink);
+  margin-bottom: 4px;
+}
+
+.inbound-switch-desc {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 12px;
+}
+
+/* Advanced Telephony Accordion */
+.telephony-advanced-acc {
+  margin-top: 24px;
+}
+
+.telephony-advanced-toggle {
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.telephony-advanced-toggle:hover {
+  background: var(--surface-sunken, rgba(0, 0, 0, 0.04)) !important;
+  border-color: var(--border-strong, #d4d4d8) !important;
+}
+
+/* Responsive and accessibility */
+@media (max-width: 768px) {
+  .inbound-hero-body {
+    grid-template-columns: 1fr;
+    gap: 16px;
+  }
+  .inbound-hero-phone-number {
+    font-size: 22px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .telephony-advanced-toggle,
+  .builder-btn-add,
+  #btnToggleBuilder {
+    transition: none !important;
+  }
+}
+
