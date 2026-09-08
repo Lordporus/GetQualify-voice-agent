@@ -177,7 +177,69 @@ async function createEmbedToken(workflowId) {
   return String(data.token);
 }
 
-async function updateWorkflowDefinition(workflowId, { name, definition }) {
+function isRumikAgent(agent) {
+  const a = agent || {};
+  const tts = a.tts || {};
+  const provider = String(tts.provider || a.tts_provider || '').toLowerCase();
+  const model = String(tts.model || a.tts_model || '').toLowerCase();
+  if (provider === 'rumik') return true;
+  if (model === 'muga' || model === 'mulberry') return true;
+  return false;
+}
+
+function buildWorkflowConfigurations(agent) {
+  if (!isRumikAgent(agent)) {
+    return null;
+  }
+
+  const a = agent || {};
+  const tts = a.tts || {};
+  const model = String(tts.model || a.tts_model || 'mulberry').toLowerCase();
+  const voice = String(tts.voice || a.tts_voice || 'ira');
+  const description = String(
+    tts.description ||
+    a.tts_description ||
+    'a warm 30s conversational indian voice, natural cadence, clear articulation'
+  );
+
+  const rumikKey = process.env.RUMIK_API_KEY || '';
+  const rumikGateway = process.env.RUMIK_BASE_URL || 'https://silk-api.rumik.ai';
+  const groqKey = process.env.GROQ_API_KEY || '';
+  const deepgramKey = process.env.DEEPGRAM_API_KEY || '';
+
+  return {
+    model_configuration_v2_override: {
+      byok: {
+        mode: 'pipeline',
+        pipeline: {
+          llm: {
+            provider: 'groq',
+            model: 'openai/gpt-oss-20b',
+            api_key: groqKey,
+          },
+          stt: {
+            provider: 'deepgram',
+            model: 'nova-3-general',
+            language: 'multi',
+            api_key: deepgramKey,
+          },
+          tts: {
+            provider: 'rumik',
+            model: model === 'muga' ? 'muga' : 'mulberry',
+            voice,
+            description,
+            gateway_url: rumikGateway,
+            api_key: rumikKey,
+          },
+        },
+      },
+      mode: 'byok',
+      version: 2,
+    },
+  };
+}
+
+async function updateWorkflowDefinition(workflowId, { name, definition, configurations }) {
   const { baseUrl, apiKey } = getDograhConfig();
   if (!apiKey) throw new Error('DOGRAH_API_KEY is not configured');
 
@@ -185,6 +247,9 @@ async function updateWorkflowDefinition(workflowId, { name, definition }) {
     name: String(name || 'Agent Workflow'),
     workflow_definition: definition,
   };
+  if (configurations && Object.keys(configurations).length > 0) {
+    body.workflow_configurations = configurations;
+  }
 
   const res = await fetch(`${baseUrl}/api/v1/workflow/${workflowId}`, {
     method: 'PUT',
@@ -225,13 +290,16 @@ async function syncAgentWorkflow(agent = {}) {
     }
 
     const definition = buildWorkflowDefinition(agent);
+    const configurations = buildWorkflowConfigurations(agent);
     const existingWfId = Number(agent.dograhWorkflowId || agent.dograh_workflow_id);
 
     if (existingWfId && existingWfId > 0) {
       await updateWorkflowDefinition(existingWfId, {
         name: agent.name || 'Agent Workflow',
         definition,
+        configurations,
       });
+      await publishWorkflow(existingWfId);
 
       let embedToken = agent.dograhEmbedToken || agent.dograh_embed_token;
       if (!embedToken) {
@@ -245,6 +313,13 @@ async function syncAgentWorkflow(agent = {}) {
       name: agent.name || 'Agent Workflow',
       definition,
     });
+    if (configurations) {
+      await updateWorkflowDefinition(workflowId, {
+        name: agent.name || 'Agent Workflow',
+        definition,
+        configurations,
+      });
+    }
     await publishWorkflow(workflowId);
     const embedToken = await createEmbedToken(workflowId);
 
@@ -257,6 +332,8 @@ async function syncAgentWorkflow(agent = {}) {
 
 module.exports = {
   buildWorkflowDefinition,
+  buildWorkflowConfigurations,
+  isRumikAgent,
   createWorkflowDefinition,
   publishWorkflow,
   createEmbedToken,
