@@ -160,8 +160,11 @@ CREATE TABLE IF NOT EXISTS notifications (
   subject TEXT,
   status TEXT DEFAULT 'pending',
   sendgrid_id TEXT,
+  resend_id TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
+ALTER TABLE notifications ADD COLUMN IF NOT EXISTS resend_id TEXT;
+CREATE INDEX IF NOT EXISTS idx_notifications_resend_id ON notifications (resend_id);
 
 CREATE TABLE IF NOT EXISTS call_recordings (
   id TEXT PRIMARY KEY,
@@ -465,3 +468,44 @@ CREATE TABLE IF NOT EXISTS email_otps (
   exp BIGINT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Phase 3: WhatsApp message audit trail
+CREATE TABLE IF NOT EXISTS whatsapp_messages (
+  id              TEXT PRIMARY KEY,
+  tenant_id       TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  recipient_phone TEXT NOT NULL,
+  template_name   TEXT NOT NULL,
+  status          TEXT DEFAULT 'sent',
+  meta_message_id TEXT,
+  payload         JSONB DEFAULT '{}',
+  created_at      TIMESTAMPTZ DEFAULT NOW()
+);
+CREATE INDEX IF NOT EXISTS idx_whatsapp_messages_tenant ON whatsapp_messages(tenant_id);
+
+-- =============================================================================
+-- Phase 4 (Upgrade): Appointment Reminders + HubSpot CRM Sync
+-- =============================================================================
+
+CREATE TABLE IF NOT EXISTS appointment_reminders (
+  id               TEXT PRIMARY KEY,
+  tenant_id        TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+  appointment_id   TEXT NOT NULL,
+  scheduled_for    TIMESTAMPTZ NOT NULL,
+  channel          TEXT DEFAULT 'whatsapp',    -- 'whatsapp' | 'sms' | 'voice'
+  status           TEXT DEFAULT 'scheduled',   -- 'scheduled' | 'sent' | 'canceled' | 'failed'
+  last_error       TEXT,
+  attendee_phone   TEXT,
+  attendee_name    TEXT,
+  appointment_time TEXT,
+  business_name    TEXT,
+  created_at       TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_reminders_tenant    ON appointment_reminders(tenant_id);
+CREATE INDEX IF NOT EXISTS idx_reminders_scheduled ON appointment_reminders(status, scheduled_for);
+
+ALTER TABLE leads ADD COLUMN IF NOT EXISTS hubspot_contact_id TEXT;
+ALTER TABLE calls  ADD COLUMN IF NOT EXISTS hubspot_call_id   TEXT;
+
+CREATE INDEX IF NOT EXISTS idx_leads_hubspot ON leads(hubspot_contact_id);
+

@@ -5,6 +5,7 @@ const { google } = require('googleapis');
 const core = require('./core');
 const db = require('./db');
 const sms = require('./sms');
+const whatsapp = require('./whatsapp');
 
 class CalendarError extends Error {
   constructor(message, status = 500, code = 'calendar_error', detail = null) {
@@ -439,6 +440,78 @@ async function bookAppointment(tenantId, {
     }).catch((err) => {
       console.warn('[calendar] SMS booking confirmation dispatch error:', err.message);
     });
+
+    // 3. Fire WhatsApp booking confirmation if attendeePhone is provided (non-blocking)
+    if (whatsapp.isConfigured()) {
+      whatsapp.sendBookingConfirmation(attendeePhone, {
+        tenantId,
+        customerName: attendeeName,
+        serviceName: summary,
+        timeString: startDate.toLocaleString('en-US', { timeZone: timezone, dateStyle: 'medium', timeStyle: 'short' }),
+        address: '',
+      }).catch((err) => {
+        console.warn('[calendar] WhatsApp booking confirmation dispatch error:', err.message);
+      });
+    }
+
+    // 4. Schedule BullMQ appointment reminder (24h before, non-blocking)
+    try {
+      const queue = require('./queue');
+      if (queue.reminderReady && attendeePhone) {
+        let bizName = 'GetQualify';
+        if (db.isPostgres) {
+          const tRes = await db.query('SELECT name FROM tenants WHERE id = $1', [tenantId])
+            .catch(() => ({ rows: [] }));
+          if (tRes.rows.length > 0 && tRes.rows[0].name) bizName = tRes.rows[0].name;
+        } else {
+          bizName = businessName;
+        }
+        const reminderTime = new Date(startDate.getTime() - 24 * 60 * 60 * 1000);
+        const delay = reminderTime.getTime() - Date.now();
+        const reminderDbId = core.genId('rem_');
+        const timeStr = startDate.toLocaleString('en-US', {
+          timeZone: timezone,
+          dateStyle: 'medium',
+          timeStyle: 'short',
+        });
+
+        if (db.isPostgres) {
+          await db.query(
+            `INSERT INTO appointment_reminders
+               (id, tenant_id, appointment_id, scheduled_for, channel, status,
+                attendee_phone, attendee_name, appointment_time, business_name, created_at)
+             VALUES ($1,$2,$3,$4,'whatsapp','scheduled',$5,$6,$7,$8,NOW())
+             ON CONFLICT (id) DO NOTHING`,
+            [reminderDbId, tenantId, createdEvent.id, reminderTime.toISOString(),
+             attendeePhone, attendeeName, timeStr, bizName]
+          ).catch((e) => console.warn('[calendar] reminder DB insert:', e.message));
+        }
+
+        if (delay > 0) {
+          queue.scheduleReminder({
+            tenantId,
+            appointmentId: createdEvent.id,
+            attendeePhone,
+            attendeeName,
+            appointmentTime: timeStr,
+            businessName: bizName,
+            channel: 'whatsapp',
+            delay,
+            jobId: reminderDbId,
+          }).catch((e) => console.warn('[calendar] reminder queue error:', e.message));
+        } else {
+          // Appointment < 24h away — cancel reminder
+          if (db.isPostgres) {
+            await db.query(
+              `UPDATE appointment_reminders SET status='canceled', last_error='appointment_too_soon' WHERE id=$1`,
+              [reminderDbId]
+            ).catch(() => {});
+          }
+        }
+      }
+    } catch (reminderErr) {
+      console.warn('[calendar] could not schedule reminder:', reminderErr.message);
+    }
   }
 
   return {

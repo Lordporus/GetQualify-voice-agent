@@ -10,6 +10,8 @@
 
 const https = require('https');
 const crypto = require('crypto');
+const db = require('./db');
+const core = require('./core');
 
 const GRAPH_API_HOST = 'graph.facebook.com';
 const GRAPH_API_VERSION = 'v19.0';
@@ -31,6 +33,52 @@ function getCredentials() {
     verifyToken: process.env.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '',
     appSecret: process.env.WHATSAPP_APP_SECRET || '',
   };
+}
+
+function isConfigured() {
+  const { accessToken, phoneNumberId } = getCredentials();
+  return Boolean(accessToken && phoneNumberId);
+}
+
+/**
+ * Logs a message attempt into the whatsapp_messages table.
+ */
+async function logMessage({ id, tenantId, recipientPhone, templateName, status = 'sent', metaMessageId = null, payload = {} }) {
+  const msgId = id || core.genId('wamsg_');
+  const now = new Date().toISOString();
+  try {
+    if (db.isPostgres) {
+      await db.query(
+        `INSERT INTO whatsapp_messages (id, tenant_id, recipient_phone, template_name, status, meta_message_id, payload, created_at)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+         ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, meta_message_id = COALESCE(EXCLUDED.meta_message_id, whatsapp_messages.meta_message_id)`,
+        [msgId, tenantId || null, recipientPhone, templateName, status, metaMessageId, JSON.stringify(payload), now]
+      );
+    } else {
+      await core.mutate((d) => {
+        if (!d.whatsappMessages) d.whatsappMessages = [];
+        const existing = d.whatsappMessages.find((m) => m.id === msgId);
+        if (existing) {
+          existing.status = status;
+          if (metaMessageId) existing.metaMessageId = metaMessageId;
+        } else {
+          d.whatsappMessages.push({
+            id: msgId,
+            tenantId: tenantId || null,
+            recipientPhone,
+            templateName,
+            status,
+            metaMessageId,
+            payload,
+            createdAt: now,
+          });
+        }
+      });
+    }
+  } catch (err) {
+    console.warn('[whatsapp] Error logging message to audit store:', err.message);
+  }
+  return msgId;
 }
 
 /**
@@ -152,7 +200,7 @@ function verifyWebhookSignature(rawBody, signatureHeader) {
 /**
  * Pre-formatted helper: Booking Confirmation.
  */
-function sendBookingConfirmation(to, { customerName, serviceName, timeString, address }) {
+async function sendBookingConfirmation(to, { tenantId, customerName, serviceName, timeString, address } = {}) {
   const components = [{
     type: 'body',
     parameters: [
@@ -162,13 +210,35 @@ function sendBookingConfirmation(to, { customerName, serviceName, timeString, ad
       { type: 'text', text: address || 'Your location' },
     ],
   }];
-  return sendTemplateMessage(to, 'booking_confirmation', 'en_US', components);
+  try {
+    const res = await sendTemplateMessage(to, 'booking_confirmation', 'en_US', components);
+    const metaId = (res && res.messages && res.messages[0] && res.messages[0].id) || null;
+    await logMessage({
+      tenantId: tenantId || null,
+      recipientPhone: to,
+      templateName: 'booking_confirmation',
+      status: (res && res.error) ? 'failed' : 'sent',
+      metaMessageId: metaId,
+      payload: { customerName, serviceName, timeString, address, response: res },
+    });
+    return res;
+  } catch (err) {
+    await logMessage({
+      tenantId: tenantId || null,
+      recipientPhone: to,
+      templateName: 'booking_confirmation',
+      status: 'failed',
+      metaMessageId: null,
+      payload: { customerName, serviceName, timeString, address, error: err.message },
+    });
+    throw err;
+  }
 }
 
 /**
  * Pre-formatted helper: Appointment Reminder.
  */
-function sendAppointmentReminder(to, { customerName, serviceName, timeString }) {
+async function sendAppointmentReminder(to, { tenantId, customerName, serviceName, timeString } = {}) {
   const components = [{
     type: 'body',
     parameters: [
@@ -177,13 +247,35 @@ function sendAppointmentReminder(to, { customerName, serviceName, timeString }) 
       { type: 'text', text: timeString || '' },
     ],
   }];
-  return sendTemplateMessage(to, 'appointment_reminder', 'en_US', components);
+  try {
+    const res = await sendTemplateMessage(to, 'appointment_reminder', 'en_US', components);
+    const metaId = (res && res.messages && res.messages[0] && res.messages[0].id) || null;
+    await logMessage({
+      tenantId: tenantId || null,
+      recipientPhone: to,
+      templateName: 'appointment_reminder',
+      status: (res && res.error) ? 'failed' : 'sent',
+      metaMessageId: metaId,
+      payload: { customerName, serviceName, timeString, response: res },
+    });
+    return res;
+  } catch (err) {
+    await logMessage({
+      tenantId: tenantId || null,
+      recipientPhone: to,
+      templateName: 'appointment_reminder',
+      status: 'failed',
+      metaMessageId: null,
+      payload: { customerName, serviceName, timeString, error: err.message },
+    });
+    throw err;
+  }
 }
 
 /**
  * Pre-formatted helper: Call Follow-up.
  */
-function sendCallFollowup(to, { customerName, summary }) {
+async function sendCallFollowup(to, { tenantId, customerName, summary } = {}) {
   const components = [{
     type: 'body',
     parameters: [
@@ -191,11 +283,35 @@ function sendCallFollowup(to, { customerName, summary }) {
       { type: 'text', text: summary || 'Thank you for speaking with us today.' },
     ],
   }];
-  return sendTemplateMessage(to, 'call_followup', 'en_US', components);
+  try {
+    const res = await sendTemplateMessage(to, 'call_followup', 'en_US', components);
+    const metaId = (res && res.messages && res.messages[0] && res.messages[0].id) || null;
+    await logMessage({
+      tenantId: tenantId || null,
+      recipientPhone: to,
+      templateName: 'call_followup',
+      status: (res && res.error) ? 'failed' : 'sent',
+      metaMessageId: metaId,
+      payload: { customerName, summary, response: res },
+    });
+    return res;
+  } catch (err) {
+    await logMessage({
+      tenantId: tenantId || null,
+      recipientPhone: to,
+      templateName: 'call_followup',
+      status: 'failed',
+      metaMessageId: null,
+      payload: { customerName, summary, error: err.message },
+    });
+    throw err;
+  }
 }
 
 module.exports = {
   WhatsAppError,
+  isConfigured,
+  logMessage,
   sendTemplateMessage,
   verifyChallenge,
   verifyWebhookSignature,

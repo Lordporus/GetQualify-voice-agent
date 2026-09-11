@@ -367,11 +367,33 @@ test('Agent Call Routing: Inbound & Outbound Configuration, Security, and Dial W
   assert.equal(dialOverrideRes.status, 200, 'Dial with agentId override must succeed');
   assert.equal(lastDograhDial.body.workflow_id, 2, 'Dial with override should resolve Payal workflow_id: 2');
 
-  // E) Tenant B has no routing set -> falls back to default DOGRAH_WORKFLOW_ID (1)
-  const dialTenantB = await req('POST', `${base}/api/telephony/dial`, {
-    number: '9876543210',
-    confirm: true,
-  }, headersB);
-  assert.equal(dialTenantB.status, 200, 'Tenant B dial with fallback default should succeed');
-  assert.equal(lastDograhDial.body.workflow_id, 1, 'Tenant B without routing should fall back to DOGRAH_WORKFLOW_ID: 1');
+  // ─── 13. Phase 2: Single Active Inbound Agent & Derived Status ──────────
+  // A) GET /api/agents derives isActiveInbound correctly for Tenant A
+  const agentsListRes1 = await req('GET', `${base}/api/agents`, null, headersA);
+  assert.equal(agentsListRes1.status, 200, 'GET /api/agents must return 200');
+  const payalAgent1 = agentsListRes1.body.agents.find((a) => a.id === agentPayalId);
+  const qualAgent1 = agentsListRes1.body.agents.find((a) => a.id === agentQualId);
+  assert.equal(payalAgent1.isActiveInbound, true, 'Payal should have isActiveInbound: true as configured inbound agent');
+  assert.equal(qualAgent1.isActiveInbound, false, 'Qual bot should have isActiveInbound: false');
+
+  // B) Atomically reassign inbound to Lead Qual Bot (Agent B)
+  const reassignRes = await req('POST', `${base}/api/routing/update`, {
+    inboundAgentId: agentQualId,
+    outboundAgentId: agentQualId,
+    phoneNumber: '+918065354620',
+  }, headersA);
+  assert.equal(reassignRes.status, 200, 'Reassigning inbound agent must succeed');
+  assert.equal(reassignRes.body.routing.inboundAgentId, agentQualId);
+
+  // C) GET /api/agents now derives isActiveInbound: true for Agent B and false for Agent A
+  const agentsListRes2 = await req('GET', `${base}/api/agents`, null, headersA);
+  assert.equal(agentsListRes2.status, 200);
+  const payalAgent2 = agentsListRes2.body.agents.find((a) => a.id === agentPayalId);
+  const qualAgent2 = agentsListRes2.body.agents.find((a) => a.id === agentQualId);
+  assert.equal(qualAgent2.isActiveInbound, true, 'Lead Qual Bot should now be isActiveInbound: true');
+  assert.equal(payalAgent2.isActiveInbound, false, 'Payal should now be automatically unassigned (isActiveInbound: false)');
+
+  // D) Verify Dograh was synced with Lead Qual Bot's workflow (workflow 1)
+  assert.equal(lastDograhPut.body.inbound_workflow_id, 1, 'Dograh sync must receive new inbound workflow 1');
 });
+

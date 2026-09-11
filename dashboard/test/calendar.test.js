@@ -160,12 +160,24 @@ test('Google Calendar OAuth2 flow, availability, booking, and disconnect lifecyc
   assert.equal(avail.busy[0].start, '2026-09-04T10:00:00Z');
   assert.equal(capturedFreebusy.requestBody.items[0].id, 'primary');
 
-  // 5. Book appointment
+  // Mock queue.scheduleReminder to verify reminder job scheduling
+  const queue = require('../lib/queue');
+  let capturedReminder = null;
+  const origScheduleReminder = queue.scheduleReminder;
+  Object.defineProperty(queue, 'reminderReady', { value: true, configurable: true });
+  queue.scheduleReminder = async (params) => {
+    capturedReminder = params;
+    return { queued: true, jobId: 'rem_mock_1' };
+  };
+
+  // 5. Book appointment (more than 24h away to trigger reminder schedule)
+  const farFuture = new Date(Date.now() + 48 * 60 * 60 * 1000);
+  const farFutureEnd = new Date(farFuture.getTime() + 60 * 60 * 1000);
   const booking = await calendar.bookAppointment(tenantId, {
     summary: 'HVAC Duct Cleaning Consultation',
     description: 'Quarterly checkup requested',
-    start: '2026-09-04T14:00:00Z',
-    end: '2026-09-04T15:00:00Z',
+    start: farFuture.toISOString(),
+    end: farFutureEnd.toISOString(),
     attendeeEmail: 'vikas@gupta.com',
     attendeeName: 'Vikas Gupta',
     attendeePhone: '+919876543210',
@@ -189,6 +201,15 @@ test('Google Calendar OAuth2 flow, availability, booking, and disconnect lifecyc
   // Verify SMS confirmation was triggered
   assert.ok(capturedSms);
   assert.equal(capturedSms.to, '+919876543210');
+
+  // Verify BullMQ reminder job scheduling was triggered
+  assert.ok(capturedReminder);
+  assert.equal(capturedReminder.appointmentId, 'gcal_event_555');
+  assert.equal(capturedReminder.attendeePhone, '+919876543210');
+  assert.equal(capturedReminder.channel, 'whatsapp');
+  assert.ok(capturedReminder.delay > 0);
+
+  queue.scheduleReminder = origScheduleReminder;
 
   // 6. Disconnect integration
   const discRes = await calendar.disconnect(tenantId);

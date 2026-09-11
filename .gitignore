@@ -20,3 +20,5 @@ data/*.json
 scratch/
 node_modules/
 .planning/
+getqualify-final-implementation-prompt.md
+getqualify-self-sell-agent.md

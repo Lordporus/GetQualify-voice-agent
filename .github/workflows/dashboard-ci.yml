@@ -128,6 +128,8 @@ jobs:
           MSG91_AUTH_KEY: ${{ secrets.MSG91_AUTH_KEY || '' }}
           MSG91_SENDER_ID: ${{ secrets.MSG91_SENDER_ID || '' }}
           SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY || '' }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY || '' }}
+          RESEND_FROM_EMAIL: ${{ secrets.RESEND_FROM_EMAIL || '' }}
           VULTR_ACCESS_KEY_ID: ${{ secrets.VULTR_ACCESS_KEY_ID || '' }}
           VULTR_SECRET_ACCESS_KEY: ${{ secrets.VULTR_SECRET_ACCESS_KEY || '' }}
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID || '' }}

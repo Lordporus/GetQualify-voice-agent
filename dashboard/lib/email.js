@@ -1,6 +1,5 @@
 'use strict';
 
-const sgMail = require('@sendgrid/mail');
 const core = require('./core');
 const db = require('./db');
 
@@ -15,27 +14,28 @@ class EmailError extends Error {
 }
 
 /**
- * Checks if SendGrid is configured with an API key.
+ * Checks if Resend or SendGrid is configured with an API key.
  */
 function isConfigured() {
-  return Boolean(process.env.SENDGRID_API_KEY);
+  return Boolean(process.env.RESEND_API_KEY || process.env.SENDGRID_API_KEY);
 }
 
 /**
  * Logs an email attempt into the notifications table (PostgreSQL or JSON store).
  */
-async function logNotification({ id, tenantId, type, recipientEmail, subject, status, sendgridId }) {
+async function logNotification({ id, tenantId, type, recipientEmail, subject, status, resendId, sendgridId }) {
   const notifId = id || core.genId('notif_');
   const now = new Date().toISOString();
 
   if (db.isPostgres) {
     await db.query(
-      `INSERT INTO notifications (id, tenant_id, type, recipient_email, subject, status, sendgrid_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `INSERT INTO notifications (id, tenant_id, type, recipient_email, subject, status, resend_id, sendgrid_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
        ON CONFLICT (id) DO UPDATE SET
          status = EXCLUDED.status,
-         sendgrid_id = EXCLUDED.sendgrid_id`,
-      [notifId, tenantId, type || 'general', recipientEmail, subject, status, sendgridId || null, now]
+         resend_id = COALESCE(EXCLUDED.resend_id, notifications.resend_id),
+         sendgrid_id = COALESCE(EXCLUDED.sendgrid_id, notifications.sendgrid_id)`,
+      [notifId, tenantId, type || 'general', recipientEmail, subject, status, resendId || null, sendgridId || null, now]
     ).catch((err) => {
       console.error('[email] Error logging notification to Postgres:', err.message);
     });
@@ -52,6 +52,8 @@ async function logNotification({ id, tenantId, type, recipientEmail, subject, st
         recipient_email: recipientEmail,
         subject,
         status,
+        resendId: resendId || null,
+        resend_id: resendId || null,
         sendgridId: sendgridId || null,
         sendgrid_id: sendgridId || null,
         createdAt: now,
@@ -65,7 +67,7 @@ async function logNotification({ id, tenantId, type, recipientEmail, subject, st
     });
   }
 
-  return { id: notifId, tenantId, type, recipientEmail, subject, status, sendgridId, createdAt: now };
+  return { id: notifId, tenantId, type, recipientEmail, subject, status, resendId, sendgridId, createdAt: now };
 }
 
 /**
@@ -96,7 +98,8 @@ async function getTenantOwnerEmail(tenantId) {
 }
 
 /**
- * Core sendEmail method wrapping @sendgrid/mail and persisting to `notifications`.
+ * Core sendEmail method supporting Resend (native fetch) as primary provider
+ * and SendGrid as backward-compatible fallback, persisting to `notifications`.
  */
 async function sendEmail({ tenantId, to, subject, text, html, type = 'general', cc, bcc }) {
   const notifId = core.genId('notif_');
@@ -112,8 +115,10 @@ async function sendEmail({ tenantId, to, subject, text, html, type = 'general', 
     throw new EmailError('Email subject is required', 422, 'missing_subject');
   }
 
-  const apiKey = process.env.SENDGRID_API_KEY;
-  if (!apiKey) {
+  const resendApiKey = process.env.RESEND_API_KEY;
+  const sendgridApiKey = process.env.SENDGRID_API_KEY;
+
+  if (!resendApiKey && !sendgridApiKey) {
     await logNotification({
       id: notifId,
       tenantId,
@@ -121,13 +126,94 @@ async function sendEmail({ tenantId, to, subject, text, html, type = 'general', 
       recipientEmail,
       subject,
       status: 'failed',
+      resendId: null,
       sendgridId: null,
     });
-    throw new EmailError('SENDGRID_API_KEY is not configured', 503, 'email_not_configured');
+    throw new EmailError('Neither RESEND_API_KEY nor SENDGRID_API_KEY is configured', 503, 'email_not_configured');
   }
 
+  // --- Primary Provider: Resend (Native Fetch) ---
+  if (resendApiKey) {
+    const fromEmail = process.env.RESEND_FROM_EMAIL || 'noreply@hello.getqualify.in';
+    const payload = {
+      from: fromEmail,
+      to: [recipientEmail],
+      subject,
+      text: text || '',
+      html: html || text || '',
+    };
+    if (cc) payload.cc = Array.isArray(cc) ? cc : [cc];
+    if (bcc) payload.bcc = Array.isArray(bcc) ? bcc : [bcc];
+
+    try {
+      const fetchFn = typeof globalThis.fetch === 'function' ? globalThis.fetch : require('node-fetch');
+      const response = await fetchFn('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${resendApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      });
+
+      let responseBody = {};
+      try {
+        responseBody = await response.json();
+      } catch (_) {
+        responseBody = {};
+      }
+
+      if (!response.ok) {
+        await logNotification({
+          id: notifId,
+          tenantId,
+          type,
+          recipientEmail,
+          subject,
+          status: 'failed',
+          resendId: null,
+        });
+        const msg = responseBody.message || responseBody.error || `HTTP ${response.status}`;
+        throw new EmailError(`Resend dispatch failed: ${msg}`, response.status >= 400 && response.status < 500 ? response.status : 502, 'upstream_email_error', responseBody);
+      }
+
+      const resendId = responseBody.id || null;
+      await logNotification({
+        id: notifId,
+        tenantId,
+        type,
+        recipientEmail,
+        subject,
+        status: 'sent',
+        resendId,
+      });
+
+      return {
+        ok: true,
+        notificationId: notifId,
+        resendId,
+        recipientEmail,
+        status: 'sent',
+      };
+    } catch (err) {
+      if (err instanceof EmailError) throw err;
+      await logNotification({
+        id: notifId,
+        tenantId,
+        type,
+        recipientEmail,
+        subject,
+        status: 'failed',
+        resendId: null,
+      });
+      throw new EmailError(`Resend network error: ${err.message}`, 502, 'upstream_email_error');
+    }
+  }
+
+  // --- Fallback Provider: SendGrid ---
+  const sgMail = require('@sendgrid/mail');
   const fromEmail = process.env.SENDGRID_FROM_EMAIL || 'noreply@getqualify.ai';
-  sgMail.setApiKey(apiKey);
+  sgMail.setApiKey(sendgridApiKey);
 
   const msg = {
     to: recipientEmail,

@@ -122,7 +122,21 @@ test('Dograh post-call webhook lifecycle and security', { timeout: 60000 }, asyn
   assert.ok(missedBody.lead_id);
 
   // 4. Verify DB file has the new lead and call
-  const dbData = JSON.parse(await readFile(dbFile, 'utf8'));
+  async function readDbWithRetry(filePath) {
+    for (let i = 0; i < 20; i++) {
+      try {
+        const raw = await readFile(filePath, 'utf8');
+        if (raw && raw.trim().startsWith('{')) {
+          return JSON.parse(raw);
+        }
+      } catch (_) {}
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const finalRaw = await readFile(filePath, 'utf8');
+    return JSON.parse(finalRaw);
+  }
+
+  const dbData = await readDbWithRetry(dbFile);
   const lead = (dbData.leads || []).find((l) => l.phone === '9876543210');
   assert.ok(lead, 'Lead should be created in DB');
   assert.equal(lead.name, 'Priya Sharma');
@@ -155,7 +169,7 @@ test('Dograh post-call webhook lifecycle and security', { timeout: 60000 }, asyn
   assert.equal(completedBody.status, 'completed');
   assert.equal(completedBody.lead_id, lead.id);
 
-  const dbDataAfter = JSON.parse(await readFile(dbFile, 'utf8'));
+  const dbDataAfter = await readDbWithRetry(dbFile);
   const updatedLead = (dbDataAfter.leads || []).find((l) => l.id === lead.id);
   assert.equal(updatedLead.status, 'contacted');
 });

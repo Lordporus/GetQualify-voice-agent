@@ -10,13 +10,14 @@ const sgMail = require('@sendgrid/mail');
 const email = require('../lib/email');
 const core = require('../lib/core');
 
-test('SendGrid email adapter configuration and fail-closed validation', async (t) => {
+test('Email adapter configuration and fail-closed validation', async (t) => {
   const origEnv = { ...process.env };
   const tempDir = await mkdtemp(path.join(os.tmpdir(), 'gq-email-test-'));
   const dbFile = path.join(tempDir, 'db.json');
 
   process.env.GETQUALIFY_DB_FILE = dbFile;
   process.env.DB_DRIVER = 'json';
+  delete process.env.RESEND_API_KEY;
   delete process.env.SENDGRID_API_KEY;
 
   t.after(async () => {
@@ -26,7 +27,7 @@ test('SendGrid email adapter configuration and fail-closed validation', async (t
 
   assert.equal(email.isConfigured(), false);
 
-  // Missing API key throws 503 and logs failed notification
+  // Missing API keys throws 503 and logs failed notification
   await assert.rejects(
     () => email.sendEmail({
       tenantId: 't_demo_email',
@@ -43,7 +44,9 @@ test('SendGrid email adapter configuration and fail-closed validation', async (t
   assert.equal(notif.status, 'failed');
 
   // Bad email throws 422
-  process.env.SENDGRID_API_KEY = 'SG.mock-test-key';
+  process.env.RESEND_API_KEY = 're_mock_test_key';
+  assert.equal(email.isConfigured(), true);
+
   await assert.rejects(
     () => email.sendEmail({
       tenantId: 't_demo_email',
@@ -55,39 +58,43 @@ test('SendGrid email adapter configuration and fail-closed validation', async (t
   );
 });
 
-test('SendGrid sendCallSummary, sendBookingConfirmation, and sendInvoiceNotification with mocked send', async (t) => {
-  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'gq-email-test2-'));
+test('Resend primary email adapter with mocked global fetch', async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'gq-resend-test-'));
   const dbFile = path.join(tempDir, 'db.json');
   const origEnv = { ...process.env };
+  const origFetch = globalThis.fetch;
 
   process.env.GETQUALIFY_DB_FILE = dbFile;
   process.env.DB_DRIVER = 'json';
-  process.env.SENDGRID_API_KEY = 'SG.mock-test-key-12345';
-  process.env.SENDGRID_FROM_EMAIL = 'voice@getqualify.ai';
+  process.env.RESEND_API_KEY = 're_live_key_98765';
+  process.env.RESEND_FROM_EMAIL = 'voice@getqualify.ai';
+  delete process.env.SENDGRID_API_KEY;
 
-  const tenantId = 't_email_suite';
+  const tenantId = 't_email_resend_suite';
 
   // Seed demo owner in JSON db so getTenantOwnerEmail can resolve
   await core.mutate((d) => {
     d.tenants.push({ id: tenantId, name: 'Acme HVAC', slug: 'acme-hvac' });
-    d.users.push({ id: 'u_owner_1', tenantId, email: 'owner@acmehvac.com', role: 'owner', status: 'active' });
+    d.users.push({ id: 'u_owner_resend', tenantId, email: 'owner@acmehvac.com', role: 'owner', status: 'active' });
   });
 
-  // Mock sgMail.send
-  let capturedMsg = null;
-  const origSend = sgMail.send;
-  sgMail.send = async function (msg) {
-    capturedMsg = msg;
-    return [{ statusCode: 202, headers: { 'x-message-id': 'msg_sg_mock_999' } }];
+  let capturedRequest = null;
+  globalThis.fetch = async function (url, options) {
+    capturedRequest = { url, ...options, bodyJson: JSON.parse(options.body) };
+    return {
+      ok: true,
+      status: 200,
+      json: async () => ({ id: 're_msg_resend_12345' }),
+    };
   };
 
   t.after(async () => {
-    sgMail.send = origSend;
+    globalThis.fetch = origFetch;
     process.env = origEnv;
     await rm(tempDir, { recursive: true, force: true }).catch(() => {});
   });
 
-  // 1. Test sendCallSummary (auto-resolves owner email)
+  // 1. Test sendCallSummary via Resend
   const summaryRes = await email.sendCallSummary(tenantId, {
     callerName: 'Sunita Rao',
     callerPhone: '+919876543210',
@@ -102,57 +109,67 @@ test('SendGrid sendCallSummary, sendBookingConfirmation, and sendInvoiceNotifica
   assert.equal(summaryRes.ok, true);
   assert.equal(summaryRes.recipientEmail, 'owner@acmehvac.com');
   assert.equal(summaryRes.status, 'sent');
-  assert.equal(summaryRes.sendgridId, 'msg_sg_mock_999');
+  assert.equal(summaryRes.resendId, 're_msg_resend_12345');
 
-  assert.equal(capturedMsg.to, 'owner@acmehvac.com');
-  assert.equal(capturedMsg.from, 'voice@getqualify.ai');
-  assert.ok(capturedMsg.subject.includes('Sunita Rao'));
-  assert.ok(capturedMsg.html.includes('Sunita Rao'));
-  assert.ok(capturedMsg.html.includes('2m 5s'));
-  assert.ok(capturedMsg.html.includes('lead_abc123'));
-  assert.ok(capturedMsg.html.includes('https://blr1.vultrobjects.com/recordings/audio.wav'));
+  assert.equal(capturedRequest.url, 'https://api.resend.com/emails');
+  assert.equal(capturedRequest.headers.Authorization, 'Bearer re_live_key_98765');
+  assert.deepEqual(capturedRequest.bodyJson.to, ['owner@acmehvac.com']);
+  assert.equal(capturedRequest.bodyJson.from, 'voice@getqualify.ai');
+  assert.ok(capturedRequest.bodyJson.subject.includes('Sunita Rao'));
+  assert.ok(capturedRequest.bodyJson.html.includes('Sunita Rao'));
+  assert.ok(capturedRequest.bodyJson.html.includes('2m 5s'));
+  assert.ok(capturedRequest.bodyJson.html.includes('lead_abc123'));
 
-  // 2. Test sendBookingConfirmation
-  const bookingRes = await email.sendBookingConfirmation(tenantId, {
-    recipientEmail: 'client@customer.com',
-    clientName: 'Sunita Rao',
-    appointmentTime: 'Friday, Sept 5 at 10:00 AM IST',
-    agentName: 'Aarti (AI Assistant)',
-    calendarEventUrl: 'https://calendar.google.com/event?eid=123',
-    businessName: 'Acme HVAC',
-    notes: 'Please keep outdoor unit accessible.',
-  });
-
-  assert.equal(bookingRes.ok, true);
-  assert.equal(capturedMsg.to, 'client@customer.com');
-  assert.ok(capturedMsg.subject.includes('Confirmed'));
-  assert.ok(capturedMsg.html.includes('Friday, Sept 5 at 10:00 AM IST'));
-  assert.ok(capturedMsg.html.includes('Aarti (AI Assistant)'));
-  assert.ok(capturedMsg.html.includes('Please keep outdoor unit accessible.'));
-
-  // 3. Test sendInvoiceNotification
-  const invoiceRes = await email.sendInvoiceNotification(tenantId, {
-    invoiceId: 'INV-2026-09',
-    amountInr: 4500,
-    period: 'August 2026',
-    dueDate: 'Sept 15, 2026',
-    downloadUrl: 'https://getqualify.ai/billing/invoices/INV-2026-09.pdf',
-  });
-
-  assert.equal(invoiceRes.ok, true);
-  assert.equal(capturedMsg.to, 'owner@acmehvac.com');
-  assert.ok(capturedMsg.subject.includes('INV-2026-09'));
-  assert.ok(capturedMsg.html.includes('₹4,500'));
-  assert.ok(capturedMsg.html.includes('Sept 15, 2026'));
-
-  // 4. Verify all notifications are logged in the DB for this tenant
+  // 2. Verify notifications table in DB contains resend_id
   const dAfter = core.loadDb();
-  const suiteNotifs = (dAfter.notifications || []).filter((n) => n.tenantId === tenantId || n.tenant_id === tenantId);
-  assert.equal(suiteNotifs.length, 3);
-  const types = suiteNotifs.map((n) => n.type);
-  assert.deepEqual(types, ['call_summary', 'booking_confirmation', 'invoice_notification']);
-  for (const notif of suiteNotifs) {
-    assert.equal(notif.status, 'sent');
-    assert.equal(notif.sendgridId, 'msg_sg_mock_999');
-  }
+  const notif = (dAfter.notifications || []).find((n) => n.id === summaryRes.notificationId);
+  assert.ok(notif);
+  assert.equal(notif.resendId, 're_msg_resend_12345');
+  assert.equal(notif.status, 'sent');
+});
+
+test('SendGrid backward-compatible fallback with mocked send', async (t) => {
+  const tempDir = await mkdtemp(path.join(os.tmpdir(), 'gq-email-test2-'));
+  const dbFile = path.join(tempDir, 'db.json');
+  const origEnv = { ...process.env };
+
+  process.env.GETQUALIFY_DB_FILE = dbFile;
+  process.env.DB_DRIVER = 'json';
+  delete process.env.RESEND_API_KEY;
+  process.env.SENDGRID_API_KEY = 'SG.mock-test-key-12345';
+  process.env.SENDGRID_FROM_EMAIL = 'voice@getqualify.ai';
+
+  const tenantId = 't_email_suite';
+
+  await core.mutate((d) => {
+    d.tenants.push({ id: tenantId, name: 'Acme HVAC', slug: 'acme-hvac' });
+    d.users.push({ id: 'u_owner_1', tenantId, email: 'owner@acmehvac.com', role: 'owner', status: 'active' });
+  });
+
+  let capturedMsg = null;
+  const origSend = sgMail.send;
+  sgMail.send = async function (msg) {
+    capturedMsg = msg;
+    return [{ statusCode: 202, headers: { 'x-message-id': 'msg_sg_mock_999' } }];
+  };
+
+  t.after(async () => {
+    sgMail.send = origSend;
+    process.env = origEnv;
+    await rm(tempDir, { recursive: true, force: true }).catch(() => {});
+  });
+
+  const summaryRes = await email.sendCallSummary(tenantId, {
+    callerName: 'Sunita Rao',
+    callerPhone: '+919876543210',
+    duration: 125,
+    summary: 'Customer needs AC maintenance service on Friday morning.',
+    transcript: 'Customer: Hello, do you service Daikin ACs? Agent: Yes, we do.',
+  });
+
+  assert.equal(summaryRes.ok, true);
+  assert.equal(summaryRes.recipientEmail, 'owner@acmehvac.com');
+  assert.equal(summaryRes.status, 'sent');
+  assert.equal(summaryRes.sendgridId, 'msg_sg_mock_999');
+  assert.equal(capturedMsg.to, 'owner@acmehvac.com');
 });

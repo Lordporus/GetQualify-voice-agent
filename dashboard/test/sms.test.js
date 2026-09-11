@@ -129,3 +129,101 @@ test('sms helper methods format missed-call and booking payloads', async () => {
   assert.equal(lastPayload.recipients[0].appointment_time, 'Tomorrow at 10 AM');
   assert.equal(lastPayload.recipients[0].agent_name, 'Aarav');
 });
+
+test('sms sendMissedCallTextBack routes international numbers to Twilio when configured', async () => {
+  resetEnv({
+    MSG91_AUTH_KEY: 'auth-key',
+    MSG91_MISSED_CALL_TEMPLATE_ID: 'tpl_missed',
+    TWILIO_ACCOUNT_SID: 'ACmock1234567890abcdef1234567890ab',
+    TWILIO_AUTH_TOKEN: 'mock_auth_token_secret',
+    TWILIO_FROM_NUMBER: '+15550001111',
+  });
+
+  const https = require('https');
+  const origRequest = https.request;
+  let capturedTwilioReq = null;
+
+  https.request = function (options, cb) {
+    capturedTwilioReq = { ...options };
+    const { EventEmitter } = require('events');
+    const reqEmitter = new EventEmitter();
+    reqEmitter.write = function (chunk) {
+      capturedTwilioReq.body = chunk.toString('utf8');
+    };
+    reqEmitter.end = function () {
+      const respEmitter = new EventEmitter();
+      respEmitter.statusCode = 201;
+      process.nextTick(() => {
+        cb(respEmitter);
+        respEmitter.emit('data', JSON.stringify({ sid: 'SMmockTwilio123', status: 'queued' }));
+        respEmitter.emit('end');
+      });
+    };
+    return reqEmitter;
+  };
+
+  try {
+    const sms = loadSms();
+    const result = await sms.sendMissedCallTextBack('+14155552671', {
+      businessName: 'Acme Global',
+      callbackNumber: '+15550001111',
+    });
+
+    assert.ok(result);
+    assert.equal(capturedTwilioReq.hostname, 'api.twilio.com');
+    assert.equal(capturedTwilioReq.method, 'POST');
+    assert.ok(capturedTwilioReq.body.includes('To=%2B14155552671'));
+    assert.ok(capturedTwilioReq.body.includes('From=%2B15550001111'));
+    assert.ok(capturedTwilioReq.body.includes('Acme+Global'));
+  } finally {
+    https.request = origRequest;
+  }
+});
+
+test('sms sendMissedCallTextBack falls back to Twilio when MSG91 returns 502 error', async () => {
+  resetEnv({
+    MSG91_AUTH_KEY: 'auth-key',
+    MSG91_MISSED_CALL_TEMPLATE_ID: 'tpl_missed',
+    TWILIO_ACCOUNT_SID: 'ACmock1234567890abcdef1234567890ab',
+    TWILIO_AUTH_TOKEN: 'mock_auth_token_secret',
+    TWILIO_FROM_NUMBER: '+15550001111',
+  });
+
+  const https = require('https');
+  const origRequest = https.request;
+  let twilioCalled = false;
+
+  https.request = function (options, cb) {
+    twilioCalled = true;
+    const { EventEmitter } = require('events');
+    const reqEmitter = new EventEmitter();
+    reqEmitter.write = () => {};
+    reqEmitter.end = function () {
+      const respEmitter = new EventEmitter();
+      respEmitter.statusCode = 201;
+      process.nextTick(() => {
+        cb(respEmitter);
+        respEmitter.emit('data', JSON.stringify({ sid: 'SMfallback123', status: 'queued' }));
+        respEmitter.emit('end');
+      });
+    };
+    return reqEmitter;
+  };
+
+  try {
+    // MSG91 mock fails with 502
+    const sms = loadSms(async () => {
+      return { status: 502, buffer: Buffer.from(JSON.stringify({ type: 'error', message: 'Bad Gateway' })) };
+    });
+
+    const result = await sms.sendMissedCallTextBack('9876543210', {
+      businessName: 'Acme HVAC',
+      callbackNumber: '+919999999999',
+    });
+
+    assert.ok(result);
+    assert.equal(twilioCalled, true);
+  } finally {
+    https.request = origRequest;
+  }
+});

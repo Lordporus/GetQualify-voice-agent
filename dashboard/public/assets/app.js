@@ -959,12 +959,19 @@ async function viewAgents(root) {
     }
   };
 
-  builder._onCreated = () => {
+  builder._onCreated = (createdAgent) => {
     formOpen = false;
     formWrapper.style.display = 'none';
     toggleBtn.textContent = '＋ Create New Agent';
     toggleBtn.className = 'btn btn-primary';
     paintAgents();
+    if (createdAgent && createdAgent.id) {
+      State.activeAgentId = createdAgent.id;
+      State.loaded.agents = false;
+      toast((createdAgent.name || 'Agent') + ' created! Redirecting to live voice test...', 'ok');
+      goto('talk?agentId=' + encodeURIComponent(createdAgent.id) + '&new=1');
+      return;
+    }
     const gridHost = $('#agentsGrid');
     if (gridHost) {
       gridHost.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -984,7 +991,12 @@ async function viewAgents(root) {
   root.appendChild(gridHost);
 
   try {
-    await Promise.all([ensureAgents(true), ensureTelephony().catch(() => null), ensureProviders().catch(() => null)]);
+    await Promise.all([
+      ensureAgents(true),
+      ensureRouting(true).catch(() => null),
+      ensureTelephony().catch(() => null),
+      ensureProviders().catch(() => null)
+    ]);
     refillDidOptions();
     paintAgents();
     if (countLabel && State.agents) {
@@ -1113,28 +1125,136 @@ function defaultStructuredAgentConfig(industry) {
       rules: [
         'ONE or TWO short sentences per turn',
         'Empathetic, clear, and reassuring tone',
-        'Never say "sorry, I didn\'t catch that" more than once'
+        'Never say "sorry, I didn\'t catch that" more than once in entire call'
       ],
       stages: [
-        { id: 'greeting', name: 'Greeting & Triage', goal: 'Greet caller and understand if booking or medical query', requiredData: ['caller_name'] },
-        { id: 'specialty', name: 'Specialty Selection', goal: 'Identify required doctor / department', requiredData: ['department'] },
-        { id: 'booking', name: 'Slot Confirmation', goal: 'Confirm available slot and contact number', requiredData: ['preferred_time', 'phone'] }
+        { id: 'greeting', name: 'Greeting & Triage', goal: 'Greet caller warmly and understand if booking or medical query', requiredData: ['caller_name'] },
+        { id: 'specialty', name: 'Specialty & Doctor', goal: 'Identify required doctor or department', requiredData: ['department'] },
+        { id: 'booking', name: 'Slot Confirmation', goal: 'Confirm available slot and patient contact number', requiredData: ['preferred_time', 'phone'] }
       ],
       dataSchema: [
         { fieldKey: 'caller_name', label: 'Patient Name', required: true, description: 'Full name of patient' },
-        { fieldKey: 'department', label: 'Department', required: true, description: 'General Physician, Dental, Ortho, etc.' },
-        { fieldKey: 'preferred_time', label: 'Preferred Slot', required: true, description: 'Morning / Evening slot' }
+        { fieldKey: 'department', label: 'Department / Concern', required: true, description: 'General Physician, Dental, Ortho, etc.' },
+        { fieldKey: 'preferred_time', label: 'Preferred Slot', required: true, description: 'Morning or Evening appointment slot' }
       ],
       objections: [
         { trigger: 'Consultation fees kitni hai?', response: 'General physician consultation ₹500 hai. Specialist consultation ₹800 hai.' },
-        { trigger: 'Can I speak to doctor right now?', response: 'Doctor abhi patients attend kar rahe hain. Main appointment book kar sakti hoon ya urgent helpline de sakti hoon.' }
+        { trigger: 'Can I speak to doctor right now?', response: 'Doctor abhi OPD mein patients attend kar rahe hain. Main appointment confirm kar sakti hoon ya urgent emergency helpline de sakti hoon.' }
       ],
       guardrails: [
-        'Never prescribe medicines or give medical diagnosis',
-        'For chest pain, breathing difficulty, or trauma, advise visiting Emergency immediately',
-        'Confirm appointment day and time twice'
+        'Never prescribe medicines or give medical diagnosis - refer patient to doctor',
+        'For chest pain, breathing difficulty, profuse bleeding, or severe trauma, immediately advise calling 108 or visiting Emergency',
+        'Confirm appointment day and time twice before closing'
       ],
-      exampleDialog: 'Caller: Namaste, Dr. Sharma se milna tha.\nPayal: Namaste! Dr. Sharma kal subah 10 baje se available hain. Kya main aapka appointment schedule kar doon?'
+      exampleDialog: 'Caller: Namaste, Dr. Sharma se milna tha.\nPayal: Namaste! Dr. Sharma kal subah 10 baje available hain. Kya main aapka appointment schedule kar doon?'
+    };
+  }
+  if (ind === 'restaurant') {
+    return {
+      version: 2,
+      identity: {
+        roleName: 'Payal, Table Reservation Host',
+        businessName: 'Spice & Saffron Restaurant',
+        businessType: 'Fine Dining & Lounge',
+        languageMix: 'Cheerful, welcoming Hindi-English (Hinglish) mix'
+      },
+      rules: [
+        'ONE or TWO short sentences per turn',
+        'Polite, upbeat, and hospitable tone',
+        'Never say "sorry, I didn\'t catch that" more than once in entire call'
+      ],
+      stages: [
+        { id: 'greeting', name: 'Greeting & Slot', goal: 'Greet warmly and ask desired date and lunch/dinner time', requiredData: ['reservation_date', 'reservation_time'] },
+        { id: 'party', name: 'Party Size & Seating', goal: 'Capture number of guests and indoor AC vs outdoor terrace seating', requiredData: ['party_size', 'seating_preference'] },
+        { id: 'confirm', name: 'Confirmation & Policy', goal: 'Read back details and remind of 15-minute grace period', requiredData: ['guest_name', 'contact_number'] }
+      ],
+      dataSchema: [
+        { fieldKey: 'guest_name', label: 'Guest Name', required: true, description: 'Name of the reservation holder' },
+        { fieldKey: 'party_size', label: 'Number of Guests', required: true, description: 'Total headcount' },
+        { fieldKey: 'reservation_time', label: 'Date & Time', required: true, description: 'Target dining slot' }
+      ],
+      objections: [
+        { trigger: 'Can we hold table if late?', response: 'Table reservation pe 15 minutes ka grace period rehta hai. Uske baad waiting guests ko allot ho sakti hai.' },
+        { trigger: 'Dietary or allergy queries', response: 'Severe allergy requirements ke liye main head chef ya duty manager ko notify kar deti hoon.' }
+      ],
+      guardrails: [
+        'Always read back party size, date, and time slot twice for explicit confirmation',
+        'Enforce table holding grace period limit (15 minutes maximum)',
+        'Direct severe allergy requests to the duty manager'
+      ],
+      exampleDialog: 'Caller: Namaste, kal dinner ke liye table chahiye.\nPayal: Namaste! Kal raat 8 baje slot available hai. Kitne logon ki table book karni hai?'
+    };
+  }
+  if (ind === 'realtor') {
+    return {
+      version: 2,
+      identity: {
+        roleName: 'Payal, Real Estate Consultant',
+        businessName: 'Skyline Realty Advisors',
+        businessType: 'Residential & Commercial Real Estate',
+        languageMix: 'Courteous, sharp Hindi-English (Hinglish) mix'
+      },
+      rules: [
+        'ONE or TWO short sentences per turn',
+        'Professional, helpful, and qualification-focused tone',
+        'Never say "sorry, I didn\'t catch that" more than once in entire call'
+      ],
+      stages: [
+        { id: 'intent', name: 'Intent Qualification', goal: 'Identify if caller wants to buy, sell, or rent property', requiredData: ['intent_type'] },
+        { id: 'preferences', name: 'Preferences & Budget', goal: 'Capture preferred locality, BHK configuration, and budget bracket', requiredData: ['preferred_location', 'configuration_bhk', 'budget_range'] },
+        { id: 'action', name: 'Site Visit & WhatsApp', goal: 'Offer on-site visit or send brochure on WhatsApp upon consent', requiredData: ['caller_name', 'phone'] }
+      ],
+      dataSchema: [
+        { fieldKey: 'caller_name', label: 'Buyer Name', required: true, description: 'Full name of prospective client' },
+        { fieldKey: 'configuration_bhk', label: 'Property Type', required: true, description: '2 BHK, 3 BHK, Penthouse, Commercial' },
+        { fieldKey: 'budget_range', label: 'Budget Range', required: true, description: 'e.g. 80 Lakhs - 1.2 Cr' }
+      ],
+      objections: [
+        { trigger: 'Direct price lock discount?', response: 'Unit pricing live availability aur floor rise pe depend karti hai. Main aapko WhatsApp pe exact brochure bhej deti hoon.' },
+        { trigger: 'Are you a broker?', response: 'Main Skyline Realty ki AI assistant hoon. Hamare certified property advisors aapko best verified options suggest karenge.' }
+      ],
+      guardrails: [
+        'Do not quote locked unit rates or guarantee inventory without verifying live listings',
+        'Confirm budget range and locality before scheduling on-site visit',
+        'Request explicit caller consent before sending brochures on WhatsApp'
+      ],
+      exampleDialog: 'Caller: Hello, 3 BHK flat search kar raha tha Whitefield mein.\nPayal: Hello! Whitefield mein ready-to-move aur upcoming options hain. Aapka estimated budget kya rahega?'
+    };
+  }
+  if (ind === 'hvac') {
+    return {
+      version: 2,
+      identity: {
+        roleName: 'Payal, HVAC Service Coordinator',
+        businessName: 'CoolComfort HVAC Solutions',
+        businessType: 'AC Repair, Servicing & Installation',
+        languageMix: 'Helpful, practical Hindi-English (Hinglish) mix'
+      },
+      rules: [
+        'ONE or TWO short sentences per turn',
+        'Direct, problem-solving, and reassuring tone',
+        'Never say "sorry, I didn\'t catch that" more than once in entire call'
+      ],
+      stages: [
+        { id: 'triage', name: 'Issue Diagnosis', goal: 'Determine AC problem (cooling, gas leakage, noise, servicing)', requiredData: ['issue_type'] },
+        { id: 'details', name: 'Appliance & Location', goal: 'Capture tonnage/brand, residential vs commercial, and full address', requiredData: ['tonnage_brand', 'service_address'] },
+        { id: 'dispatch', name: 'Inspection Fee & Dispatch', goal: 'Disclose inspection fee and confirm appointment slot twice', requiredData: ['customer_name', 'phone', 'preferred_time'] }
+      ],
+      dataSchema: [
+        { fieldKey: 'customer_name', label: 'Customer Name', required: true, description: 'Name of the contact person' },
+        { fieldKey: 'issue_type', label: 'AC Issue', required: true, description: 'Not cooling, water leak, gas refill, servicing' },
+        { fieldKey: 'service_address', label: 'Address & Landmark', required: true, description: 'Full service location' }
+      ],
+      objections: [
+        { trigger: 'Visiting charges kitni hai?', response: 'Standard technician visit and inspection charge ₹299 hai, jo repair hone par bill mein adjust ho jata hai.' },
+        { trigger: 'Urgent technician chahiye!', response: 'Main urgent dispatch queue mein request note kar rahi hoon. Technician agle 2 ghante mein visit kar sakte hain.' }
+      ],
+      guardrails: [
+        'Prioritize emergency breakdowns for server rooms, medical clinics, or vulnerable seniors during heatwaves',
+        'Always confirm full street address and nearest landmark twice',
+        'Mandatory upfront disclosure of visitation/inspection charges before booking technician'
+      ],
+      exampleDialog: 'Caller: Hello, split AC cooling bilkul band ho gayi hai.\nPayal: Hello! No tension, main technician arrange kar deti hoon. AC kaunse brand aur tonnage ka hai?'
     };
   }
   return {
@@ -1363,39 +1483,39 @@ function choosePayalTemplateModal(nameI, personaI, greetI, descI, onConfigSelect
       icon: '💇',
       category: 'Salon & Spa',
       greeting: 'Hi! Payal bol rahi hoon [your salon name] se. Aaj kya treatment lena hai?',
-      persona: `You are Payal, the AI receptionist for [salon name]. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences per turn.\n- Warm, conversational Hindi/English/Hinglish mix.\n- Like a friendly neighborhood receptionist.\n\nTHE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call.\n\nSTAGE 1: Greet in Hindi/English, ask what treatment they want.\nSTAGE 2: Help with booking, capture name, phone, preferred time.\nSTAGE 3: Close warmly in 6-10 words. Example: "Dhanyawaad! Dekhte hain Tuesday ko. Bye!"`
+      persona: `You are Payal, the AI receptionist for [salon name]. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences per turn.\n- Warm, conversational Hindi/English/Hinglish mix.\n- Like a friendly neighborhood receptionist.\n\nTHE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call.\n\nSTAGE 1 (Start): Greet in Hindi/English, ask what treatment they want.\nSTAGE 2 (Main): Help with booking, capture name, phone, preferred time.\nSTAGE 3 (End): Close warmly in 6-10 words. Example: "Dhanyawaad! Dekhte hain Tuesday ko. Bye!"`
     },
     {
       id: 'clinic',
       name: 'Payal (Medical Clinic)',
       icon: '🩺',
       category: 'Clinic & Healthcare',
-      greeting: 'Namaste! Payal speaking from [doctor name] clinic. Kya appointment chahiye?',
-      persona: `You are Payal, clinic receptionist for Dr. [Name]. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences, warm and professional.\n- Hindi/English/Hinglish as caller prefers.\n- Respectful, empathetic tone.\n\nTHE ONE RULE: NEVER say "sorry, I didn't catch that" more than once.\n\nSTAGE 1: Greet, ask if appointment or consultation needed.\nSTAGE 2: Capture symptoms lightly, find available slot, get patient details.\nSTAGE 3: Confirm appointment time twice. Example: "Doctor ko Friday 10am pe milenge. Theek hai?"`
+      greeting: 'Namaste! Payal speaking from [doctor name] clinic. Aaj appointment book karni hai ya consultation ke liye call kiya hai?',
+      persona: `You are Payal, the clinic receptionist for Dr. [Name]'s clinic. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences per turn. Warm, empathetic, and professional.\n- Bilingual Hindi and English (Hinglish) mix. Mirror caller's preferred language.\n- Respectful and reassuring tone like a trusted clinic front-desk manager.\n\nTHE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call. If unclear or noisy, roll with it in one sentence and ask a gentle clarifying question.\n\nSTAGE 1 (Start): Greet warmly, ask if they need a fresh appointment or follow-up consultation.\nSTAGE 2 (Main): Lightly ask chief health issue or department needed, offer available doctor slot, and capture patient name and phone.\nSTAGE 3 (End): Repeat appointment day and time twice. State clinic consultation fee policy if asked. Close warmly in 6-10 words: "Doctor ko Friday 10 baje milenge. Take care! Bye!"`
     },
     {
       id: 'hvac',
       name: 'Payal (HVAC & AC Services)',
       icon: '❄️',
       category: 'HVAC & Home Services',
-      greeting: 'Hello! Payal here from [company] AC services. Kya problem aa rahi hai AC mein?',
-      persona: `You are Payal, service receptionist for HVAC company. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences, quick and helpful.\n- Hindi/English/Hinglish, customer-friendly.\n- Show you understand AC issues.\n\nSTAGE 1: Greet, ask what AC issue they have.\nSTAGE 2: Understand urgency (emergency vs scheduled), get address, capture issue type.\nSTAGE 3: Confirm service timing. "Technician ko 2 ghante mein bhejenge. Address confirm kijiye?"`
+      greeting: 'Hello! Payal here from [company] AC services. AC mein kya problem aa rahi hai — cooling nahi ho rahi, water leakage hai ya servicing karwani hai?',
+      persona: `You are Payal, the service coordinator for [company] AC & HVAC Services. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences per turn. Helpful, direct, and empathetic.\n- Practical conversational Hindi, English, and Hinglish. Demonstrate HVAC troubleshooting familiarity.\n- Reassuring technician coordinator tone.\n\nTHE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call. Roll with noise and steer immediately to the core issue.\n\nSTAGE 1 (Start): Greet, determine AC problem type (no cooling, gas refill, coil leak, routine maintenance).\nSTAGE 2 (Main): Capture AC tonnage/brand (split vs window, Daikin, Voltas, LG), residential vs commercial, complete address with landmark, and preferred service time.\nSTAGE 3 (End): State the standard visiting/inspection fee (e.g. ₹299 inspection) before dispatch, confirm appointment window twice. Close in 6-10 words: "Technician time pe pahunch jayenge. Dhanyawaad! Bye!"`
     },
     {
       id: 'realtor',
       name: 'Payal (Real Estate)',
       icon: '🏢',
       category: 'Real Estate & Properties',
-      greeting: 'Hello! Payal bol rahi hoon [agency name] se. Property buy, sell ya rent karni hai?',
-      persona: `You are Payal, property inquiry receptionist. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences, warm and courteous.\n- Hindi/English/Hinglish mirroring.\n\nSTAGE 1: Greet and ask property objective.\nSTAGE 2: Capture budget, preferred location, timeline.\nSTAGE 3: Offer site visit scheduling.`
+      greeting: 'Hello! Payal bol rahi hoon [agency name] se. Aap property buy karne, sell karne ya rent pe lene ke liye dekh rahe hain?',
+      persona: `You are Payal, the property inquiry and lead qualification manager for [agency name]. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences per turn. Warm, courteous, and sharp.\n- Fluid Hindi, English, and Hinglish mirroring.\n- Professional real estate consultant vibe.\n\nTHE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call. Steer conversation forward with an intuitive query.\n\nSTAGE 1 (Start): Greet and qualify transaction intent: buying, selling, or renting.\nSTAGE 2 (Main): Capture budget range, preferred localities, configuration (2 BHK, 3 BHK, villa), timeline for possession, and buyer's name/phone.\nSTAGE 3 (End): Offer scheduling an on-site visit or sending floor plans and brochure on WhatsApp upon consent. Close warmly in 6-10 words: "Main details WhatsApp pe send karti hoon. Bye!"`
     },
     {
       id: 'restaurant',
       name: 'Payal (Restaurant Reservations)',
       icon: '🍽️',
       category: 'Restaurant & Dining',
-      greeting: 'Namaste! Payal speaking from [restaurant name]. Table reservation karni hai ya timings janne hain?',
-      persona: `You are Payal, table booking receptionist. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences, polite and upbeat.\n- Hindi/English/Hinglish mirroring.\n\nSTAGE 1: Greet and ask booking date/time.\nSTAGE 2: Capture guest count, special requests.\nSTAGE 3: Confirm reservation details clearly.`
+      greeting: 'Namaste! Payal speaking from [restaurant name]. Aaj table reservation karwani hai ya menu aur timings janne hain?',
+      persona: `You are Payal, the table reservation host for [restaurant name]. You are on a live phone call in India.\n\nHOW YOU SPEAK:\n- ONE or TWO short sentences per turn. Polite, cheerful, and upbeat.\n- Conversational Hindi, Indian English, and Hinglish mix. Mirror caller's flow.\n- Welcoming tone like a premier restaurant guest manager.\n\nTHE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call. If noisy or muffled, keep the energy positive and ask one short follow-up.\n\nSTAGE 1 (Start): Greet warmly, ask preferred date and time or lunch/dinner slot.\nSTAGE 2 (Main): Capture party size (number of guests), guest name, seating preference (indoor AC vs outdoor terrace), and any special occasion (birthday, anniversary).\nSTAGE 3 (End): Read back guest count, date, and time slot clearly. Remind about 15-minute grace period policy. Close in 6-10 words: "Friday raat 8 baje table confirm hai. Dekhte hain! Bye!"`
     }
   ];
 
@@ -1469,12 +1589,70 @@ function agentCard(a) {
   const previewBtn = el('button', { class: 'btn btn-ghost btn-sm' }, 'Preview voice');
   previewBtn.addEventListener('click', () => previewAgentVoice(a, previewBtn));
 
+  // Determine active inbound status strictly from tenant_call_routing state
+  const currentInboundId = State.routing && State.routing.routing ? State.routing.routing.inboundAgentId : null;
+  const isActiveInbound = Boolean(a.isActiveInbound || (currentInboundId && a.id === currentInboundId));
+
+  const statusBadge = isActiveInbound
+    ? el('span', { class: 'badge-ready badge-india', style: 'font-size:12px;padding:3px 9px;' }, [
+        el('span', { class: 'd', style: 'background:#10b981;box-shadow:0 0 6px #10b981;' }),
+        '🟢 Active Inbound Line'
+      ])
+    : el('span', { class: 'badge-ready', style: 'font-size:12px;padding:3px 9px;' }, [
+        el('span', { class: 'd' }),
+        '⚪ Standby'
+      ]);
+
+  let makeActiveBtn = null;
+  if (!isActiveInbound) {
+    makeActiveBtn = el('button', {
+      class: 'btn btn-ghost btn-sm',
+      style: 'color:var(--accent);border-color:rgba(184,138,45,0.3);font-size:12px;',
+      onclick: async () => {
+        const wfId = a.dograhWorkflowId || a.dograh_workflow_id;
+        if (!wfId) {
+          toast(`Cannot activate '${a.name}': No Dograh telephony workflow linked. Please edit agent or use a Payal preset.`, 'err');
+          return;
+        }
+        makeActiveBtn.disabled = true;
+        makeActiveBtn.textContent = 'Activating...';
+        try {
+          const currentOutboundId = State.routing && State.routing.routing ? State.routing.routing.outboundAgentId : a.id;
+          const phoneNum = State.routing && State.routing.routing ? State.routing.routing.phoneNumber : (providers.telephony && providers.telephony.did);
+          await api('/api/routing/update', {
+            method: 'POST',
+            body: {
+              inboundAgentId: a.id,
+              outboundAgentId: currentOutboundId || a.id,
+              phoneNumber: phoneNum
+            }
+          });
+          toast(`Line updated: incoming calls now route to ${a.name}.`, 'ok');
+          State.loaded.routing = false;
+          State.loaded.agents = false;
+          await Promise.all([ensureRouting(true), ensureAgents(true)]);
+          paintAgents();
+        } catch (err) {
+          toast(err.message || 'Failed to update active line.', 'err');
+        } finally {
+          if (makeActiveBtn) {
+            makeActiveBtn.disabled = false;
+            makeActiveBtn.textContent = 'Make Active Inbound';
+          }
+        }
+      }
+    }, 'Make Active Inbound');
+  }
+
   // textContent everywhere = XSS safe for persona/name
   return el('div', { class: 'card card-glow agent-card' }, [
     el('div', { class: 'ac-top' }, [
       el('div', { class: 'ac-av' }, initials(a.name)),
       el('div', { style: 'min-width:0' }, [
-        el('div', { class: 'ac-name' }, a.name),
+        el('div', { style: 'display:flex;align-items:center;gap:8px;flex-wrap:wrap;' }, [
+          el('span', { class: 'ac-name' }, a.name),
+          statusBadge
+        ]),
         el('div', { class: 'ac-voice' }, voiceLine)
       ])
     ]),
@@ -1485,9 +1663,10 @@ function agentCard(a) {
     ]),
     el('div', { class: 'ac-actions' }, [
       previewBtn,
+      makeActiveBtn,
       el('button', { class: 'btn btn-ghost btn-sm', onclick: () => openEditAgent(a) }, 'Edit'),
       el('button', { class: 'btn btn-ghost btn-sm', onclick: () => confirmDeleteAgent(a) }, 'Delete')
-    ])
+    ].filter(Boolean))
   ]);
 }
 
@@ -1962,8 +2141,40 @@ async function viewDemoLinks(root) {
 async function viewTalk(root) {
   root.appendChild(viewHead('Talk to your agent', 'A direct realtime voice call through the same Dograh workflow runtime used on the phone.'));
 
+  // Parse query parameters from hash (e.g. #/talk?agentId=ag_123&new=1)
+  const hashParts = (location.hash || '').split('?');
+  const params = new URLSearchParams(hashParts[1] || '');
+  const queryAgentId = params.get('agentId');
+  const isNewAgent = params.get('new') === '1';
+
   await ensureAgents().catch(() => {});
-  if (!State.activeAgentId && State.agents.length) State.activeAgentId = State.agents[0].id;
+  if (queryAgentId && State.agents.some((a) => a.id === queryAgentId)) {
+    State.activeAgentId = queryAgentId;
+  } else if (!State.activeAgentId && State.agents.length) {
+    State.activeAgentId = State.agents[0].id;
+  }
+
+  const selectedAgentObj = State.agents.find((a) => a.id === State.activeAgentId);
+  const selectedAgentName = selectedAgentObj ? selectedAgentObj.name : 'Your AI Agent';
+
+  if (isNewAgent) {
+    const welcomeCard = el('div', {
+      class: 'card card-pad',
+      style: 'margin-bottom:16px;background:rgba(16,185,129,0.08);border:1px solid rgba(16,185,129,0.3);border-radius:var(--r);display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;'
+    }, [
+      el('div', {}, [
+        el('div', { style: 'font-weight:700;font-size:14px;color:var(--ink);' }, `🎉 ${selectedAgentName} is ready for live testing!`),
+        el('div', { class: 'muted', style: 'font-size:12px;margin-top:2px;' }, 'Click "Start voice call" below to test real-time conversation over your browser microphone.')
+      ]),
+      el('button', {
+        type: 'button',
+        class: 'btn btn-sm btn-ghost',
+        style: 'font-size:12px;',
+        onclick: () => welcomeCard.remove()
+      }, '✕ Dismiss')
+    ]);
+    root.appendChild(welcomeCard);
+  }
 
   const transcript = el('div', { class: 'voice-call-stage', id: 't_voice_call', 'aria-live': 'polite' }, [
     el('div', { class: 'voice-orb', 'aria-hidden': 'true' }, [el('span'), el('span'), el('span'), el('span'), el('span')]),
@@ -2715,6 +2926,7 @@ async function viewTelephony(root) {
     advGrid
   ]);
   root.appendChild(advAccordion);
+  paintHubspotSettingsCard(root);
 
   try {
     const [routingData, telData] = await Promise.all([
@@ -3193,10 +3405,17 @@ function createFromPreset(preset) {
     confirmText: 'Create agent',
     onConfirm: async () => {
       const name = ($('#preset_agent_name').value || preset.name).trim();
-      await api('/api/agents', { method: 'POST', body: { presetId: preset.id, name: name } });
+      const res = await api('/api/agents', { method: 'POST', body: { presetId: preset.id, name: name } });
       State.loaded.agents = false;
-      toast(name + ' created.', 'ok');
-      goto('agents');
+      const newId = (res && res.agent && res.agent.id) || (res && res.id);
+      if (newId) {
+        State.activeAgentId = newId;
+        toast(name + ' created! Redirecting to live voice test...', 'ok');
+        goto('talk?agentId=' + encodeURIComponent(newId) + '&new=1');
+      } else {
+        toast(name + ' created.', 'ok');
+        goto('agents');
+      }
     }
   });
 }
@@ -3339,14 +3558,124 @@ async function updateInvoiceStatus(invoiceId, status) {
 }
 
 async function viewIntegrations(root) {
-  root.appendChild(viewHead('Integrations', 'Bring client conversations and ad research into the operating system without pretending setup is complete.'));
+  root.appendChild(viewHead('Integrations', 'Bring client conversations, ad research, and automation webhooks into the operating system.'));
   const host = el('div', { class: 'integration-grid' }, skeleton('sk-card', 2)); root.appendChild(host);
+  const webhooksHost = el('section', { class: 'card card-pad', style: 'margin-top: 24px;' }, skeleton('sk-card', 1)); root.appendChild(webhooksHost);
   try {
     const out = await api('/api/integrations');
     State.integrations = out.integrations || []; State.loaded.integrations = true;
     host.innerHTML = '';
     State.integrations.forEach((item) => host.appendChild(integrationCard(item)));
   } catch (e) { host.innerHTML = ''; host.appendChild(el('div', { class: 'card card-pad error-state' }, e.message)); }
+  paintWebhookEndpoints(webhooksHost);
+  paintHubspotSettingsCard(root);
+}
+
+async function paintWebhookEndpoints(host) {
+  host.innerHTML = '';
+  const head = el('div', { style: 'margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;' }, [
+    el('div', {}, [
+      el('span', { class: 'section-kicker' }, 'Automation'),
+      el('h3', { class: 't-h3' }, 'Zapier / n8n / Make Webhooks'),
+      el('p', { class: 'muted' }, 'Stream real-time telephony, lead, booking, and payment events to external workflows with HMAC-SHA256 signatures.')
+    ]),
+    el('button', { class: 'btn btn-primary', onclick: () => openAddWebhookModal(host) }, 'Add Webhook Endpoint')
+  ]);
+  host.appendChild(head);
+
+  try {
+    const out = await api('/api/webhooks/endpoints');
+    const endpoints = out.endpoints || [];
+    if (!endpoints.length) {
+      host.appendChild(el('div', { class: 'muted', style: 'padding: 16px 0;' }, 'No webhook endpoints registered yet. Click "Add Webhook Endpoint" to connect Zapier, n8n, or your custom webhook receiver.'));
+      return;
+    }
+    const list = el('div', { style: 'display: flex; flex-direction: column; gap: 12px;' }, endpoints.map((ep) => {
+      const pingBtn = el('button', { class: 'btn btn-ghost btn-sm' }, 'Send Test Ping');
+      pingBtn.onclick = async () => {
+        pingBtn.disabled = true; pingBtn.textContent = 'Pinging...';
+        try {
+          const res = await api('/api/webhooks/endpoints/' + encodeURIComponent(ep.id) + '/ping', { method: 'POST' });
+          if (res && res.ok) {
+            toast('Ping delivered! Status ' + res.status + ' in ' + res.latencyMs + 'ms', 'ok');
+          } else {
+            toast('Ping failed: ' + ((res && res.error) || 'HTTP ' + res.status), 'err');
+          }
+        } catch (e) { toast('Ping failed: ' + e.message, 'err'); }
+        finally { pingBtn.disabled = false; pingBtn.textContent = 'Send Test Ping'; }
+      };
+
+      const delBtn = el('button', { class: 'btn btn-ghost btn-sm', style: 'color: var(--err, #ef4444);' }, 'Delete');
+      delBtn.onclick = async () => {
+        if (!confirm('Are you sure you want to delete this webhook endpoint?')) return;
+        try {
+          await api('/api/webhooks/endpoints/' + encodeURIComponent(ep.id), { method: 'DELETE' });
+          toast('Webhook endpoint deleted.', 'ok');
+          paintWebhookEndpoints(host);
+        } catch (e) { toast(e.message, 'err'); }
+      };
+
+      const eventsBadges = (ep.events && ep.events.length)
+        ? ep.events.map((evt) => el('span', { class: 'tag', style: 'font-size: 11px; margin-right: 4px;' }, evt))
+        : [el('span', { class: 'tag', style: 'font-size: 11px;' }, 'All events (*)')];
+
+      return el('div', { class: 'card card-pad', style: 'display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;' }, [
+        el('div', { style: 'max-width: 68%;' }, [
+          el('div', { style: 'font-weight: 600; font-family: monospace; word-break: break-all;' }, ep.url),
+          el('div', { style: 'margin-top: 6px;' }, eventsBadges),
+          el('div', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;' }, 'Status: ' + (ep.status || 'active') + (ep.failure_count ? ' (' + ep.failure_count + ' failures)' : ''))
+        ]),
+        el('div', { style: 'display: flex; gap: 8px;' }, [pingBtn, delBtn])
+      ]);
+    }));
+    host.appendChild(list);
+  } catch (e) {
+    host.appendChild(el('div', { class: 'muted' }, 'Unable to load webhook endpoints: ' + e.message));
+  }
+}
+
+function openAddWebhookModal(container) {
+  const urlInput = el('input', { class: 'input', placeholder: 'https://your-domain.com/webhook or https://hooks.zapier.com/...' });
+  const eventOptions = [
+    { id: 'call.completed', label: 'call.completed (Inbound & Outbound finished calls)' },
+    { id: 'call.missed', label: 'call.missed (Inbound dropped or missed calls)' },
+    { id: 'lead.created', label: 'lead.created (New inbound callers or added leads)' },
+    { id: 'lead.updated', label: 'lead.updated (Stage, assignment, or notes changed)' },
+    { id: 'booking.created', label: 'booking.created (Google Calendar appointment bookings)' },
+    { id: 'payment.captured', label: 'payment.captured (Razorpay wallet credits)' },
+  ];
+  const checkboxes = eventOptions.map((opt) => {
+    const cb = el('input', { type: 'checkbox', value: opt.id, checked: true });
+    return el('label', { style: 'display: flex; align-items: center; gap: 8px; font-size: 13px; margin-bottom: 6px; cursor: pointer;' }, [cb, opt.label]);
+  });
+
+  modal({
+    title: 'Add Outbound Webhook',
+    body: el('div', {}, [
+      field('Webhook Target URL (HTTPS recommended)', urlInput),
+      el('div', { style: 'margin-top: 12px;' }, [
+        el('label', { class: 'label', style: 'display: block; margin-bottom: 8px; font-weight: 500;' }, 'Subscribed Events'),
+        el('div', { style: 'display: flex; flex-direction: column;' }, checkboxes)
+      ]),
+      el('p', { class: 'muted', style: 'font-size: 12px; margin-top: 12px;' }, 'Every request includes an X-GetQualify-Signature header computed as HMAC-SHA256 with the generated secret.')
+    ]),
+    confirmText: 'Register Webhook',
+    onConfirm: async () => {
+      const url = urlInput.value.trim();
+      if (!url) { toast('Please enter a webhook URL', 'err'); return; }
+      const selectedEvents = checkboxes.filter((labelEl) => labelEl.querySelector('input').checked).map((labelEl) => labelEl.querySelector('input').value);
+      try {
+        const res = await api('/api/webhooks/endpoints', {
+          method: 'POST',
+          body: { url, events: selectedEvents }
+        });
+        toast('Webhook registered successfully! Secret: ' + ((res && res.secret) ? res.secret.slice(0, 10) + '...' : 'saved'), 'ok');
+        paintWebhookEndpoints(container);
+      } catch (e) {
+        toast(e.message, 'err');
+      }
+    }
+  });
 }
 
 function integrationCard(item) {
@@ -3367,6 +3696,93 @@ function integrationCard(item) {
     ]),
     el('div', { class: 'integration-foot' }, [button, el('small', {}, 'No external service is contacted by this request.')])
   ]);
+}
+
+async function paintHubspotSettingsCard(container) {
+  const card = el('section', { class: 'card card-pad', id: 'hubspotSettingsCard', style: 'margin-top: 24px;' }, [
+    el('div', { style: 'margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px;' }, [
+      el('div', {}, [
+        el('span', { class: 'section-kicker' }, 'CRM Integration'),
+        el('h3', { class: 't-h3', style: 'display: flex; align-items: center; gap: 8px;' }, [
+          'HubSpot CRM',
+          el('span', { id: 'hubspotStatusBadge', class: 'tag', style: 'font-size: 11px; display: none;' })
+        ]),
+        el('p', { class: 'muted' }, 'Automatically sync contacts and log post-call engagements with transcripts and summaries into HubSpot.')
+      ])
+    ]),
+    el('div', { class: 'form-group', style: 'max-width: 580px;' }, [
+      el('label', { for: 'hubspot-token-input', style: 'display: block; font-size: 13px; font-weight: 500; margin-bottom: 6px;' }, 'HubSpot Private App Access Token'),
+      el('input', {
+        type: 'password',
+        id: 'hubspot-token-input',
+        class: 'input',
+        placeholder: 'pat-eu1-xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx',
+        autocomplete: 'off',
+        style: 'width: 100%; font-family: monospace; font-size: 13px;'
+      }),
+      el('p', { class: 'muted', style: 'font-size: 12px; margin-top: 4px;' },
+        'Create a Private App in HubSpot Settings > Integrations > Private Apps. Required scopes: crm.objects.contacts.write, crm.objects.calls.write.')
+    ]),
+    el('div', { style: 'margin-top: 14px; display: flex; gap: 10px; align-items: center;' }, [
+      el('button', {
+        class: 'btn btn-primary',
+        id: 'save-hubspot-token-btn',
+        onclick: async () => {
+          const input = document.getElementById('hubspot-token-input');
+          const saveBtn = document.getElementById('save-hubspot-token-btn');
+          const token = (input && input.value) ? input.value.trim() : '';
+          saveBtn.disabled = true;
+          saveBtn.textContent = 'Saving...';
+          try {
+            const res = await api('/api/settings', { method: 'PATCH', body: { hubspot_token: token || null } });
+            toast('HubSpot token saved.', 'ok');
+            if (input) input.value = '';
+            updateBadge(Boolean(res && res.settings && (res.settings.hubspotToken || res.settings.hubspotConnected)));
+          } catch (e) {
+            toast('Failed to save HubSpot token: ' + e.message, 'err');
+          } finally {
+            saveBtn.disabled = false;
+            saveBtn.textContent = 'Save Token';
+          }
+        }
+      }, 'Save Token'),
+      el('button', {
+        class: 'btn btn-ghost btn-sm',
+        id: 'disconnect-hubspot-btn',
+        style: 'display: none; color: var(--err, #ef4444);',
+        onclick: async () => {
+          if (!confirm('Disconnect HubSpot CRM integration?')) return;
+          try {
+            await api('/api/settings', { method: 'PATCH', body: { hubspot_token: null } });
+            toast('HubSpot disconnected.', 'ok');
+            updateBadge(false);
+          } catch (e) { toast(e.message, 'err'); }
+        }
+      }, 'Disconnect')
+    ])
+  ]);
+
+  function updateBadge(connected) {
+    const badge = $('#hubspotStatusBadge', card);
+    const discBtn = $('#disconnect-hubspot-btn', card);
+    const saveBtn = $('#save-hubspot-token-btn', card);
+    if (badge) {
+      badge.style.display = 'inline-block';
+      badge.textContent = connected ? '● Connected' : '○ Not configured';
+      badge.style.background = connected ? 'rgba(16,185,129,0.15)' : 'rgba(156,163,175,0.15)';
+      badge.style.color = connected ? '#10b981' : 'var(--muted)';
+    }
+    if (discBtn) discBtn.style.display = connected ? 'inline-block' : 'none';
+    if (saveBtn) saveBtn.textContent = connected ? 'Update Token' : 'Save Token';
+  }
+
+  container.appendChild(card);
+
+  try {
+    const data = await api('/api/settings');
+    const connected = Boolean(data && data.settings && (data.settings.hubspotConnected || data.settings.hubspotToken));
+    updateBadge(connected);
+  } catch (_) {}
 }
 
 async function viewAgencyPrompt(root) {
@@ -3430,6 +3846,45 @@ async function viewBilling(root) {
 }
 
 async function startRecharge(packId) {
+  // 1. Try modern in-browser Razorpay checkout first
+  try {
+    const rzpOrder = await api('/api/billing/razorpay/order', { method: 'POST', body: { packId: packId } });
+    if (rzpOrder && rzpOrder.orderId && rzpOrder.keyId && window.Razorpay) {
+      const options = {
+        key: rzpOrder.keyId,
+        amount: rzpOrder.amount,
+        currency: rzpOrder.currency || 'INR',
+        name: 'GetQualify',
+        description: 'Wallet Recharge (' + packId.toUpperCase() + ')',
+        order_id: rzpOrder.orderId,
+        handler: async function (response) {
+          toast('Payment successful! Updating wallet...', 'ok');
+          setTimeout(() => {
+            State.loaded.wallet = false;
+            onRoute();
+          }, 1200);
+        },
+        prefill: {
+          name: State.me && State.me.user ? State.me.user.name : '',
+          email: State.me && State.me.user ? State.me.user.email : '',
+        },
+        theme: { color: '#D2AE59' },
+      };
+      const rzp = new window.Razorpay(options);
+      rzp.on('payment.failed', function (resp) {
+        toast('Payment failed: ' + ((resp.error && resp.error.description) || 'Transaction cancelled'), 'err');
+      });
+      rzp.open();
+      return;
+    }
+  } catch (rzpErr) {
+    // If Razorpay is not configured on server (code: not_configured) or network fails, fall back to PayU
+    if (rzpErr.code !== 'not_configured') {
+      console.warn('Razorpay order creation error, falling back to PayU:', rzpErr.message);
+    }
+  }
+
+  // 2. Fall back to existing PayU checkout
   try {
     const out = await api('/api/payment-intents', { method: 'POST', body: { packId: packId } });
     const checkoutUrl = out.checkout && (out.checkout.action || out.checkout.url);
@@ -3438,7 +3893,7 @@ async function startRecharge(packId) {
       Object.keys(out.checkout.fields).forEach((k) => form.appendChild(el('input', { type: 'hidden', name: k, value: out.checkout.fields[k] })));
       document.body.appendChild(form); form.submit(); return;
     }
-    toast(out.message || 'PayU checkout is not enabled yet. Your wallet was not charged.', 'info');
+    toast(out.message || 'Payment gateway is not enabled yet. Your wallet was not charged.', 'info');
   } catch (e) { toast(e.message, 'err'); }
 }
 

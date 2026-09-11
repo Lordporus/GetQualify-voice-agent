@@ -207,7 +207,7 @@ function defaultDb() {
     hvacJobs: [], hvacSettings: [], paymentEvents: [], demoLinks: [],
     invoices: [], invoiceEvents: [], integrationRequests: [], agencyPrompts: [],
     clientActivities: [], tenantStatusEvents: [], leads: [], clientSettings: [],
-    calls: [], notifications: [], callRecordings: [], tenantCallRouting: [],
+    calls: [], notifications: [], callRecordings: [], tenantCallRouting: [], webhookEndpoints: [],
   };
 }
 
@@ -217,7 +217,7 @@ const COLLECTIONS = [
   'presets', 'byonConnections', 'hvacJobs', 'hvacSettings', 'paymentEvents', 'demoLinks',
   'invoices', 'invoiceEvents', 'integrationRequests', 'agencyPrompts',
   'clientActivities', 'tenantStatusEvents', 'leads', 'clientSettings',
-  'calls', 'notifications', 'callRecordings', 'tenantCallRouting',
+  'calls', 'notifications', 'callRecordings', 'tenantCallRouting', 'webhookEndpoints',
 ];
 
 function migrateDb(parsed) {

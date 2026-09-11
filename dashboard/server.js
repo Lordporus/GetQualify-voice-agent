@@ -66,6 +66,8 @@ const email = require('./lib/email');
 const dograh = require('./lib/dograh');
 const queue = require('./lib/queue');
 const whatsapp = require('./lib/whatsapp');
+const razorpay = require('./lib/razorpay');
+const hubspot = require('./lib/hubspot');
 
 const PORT = parseInt(process.env.PORT || '8787', 10);
 const DEFAULT_PROVIDERS = Object.freeze({
@@ -159,19 +161,19 @@ STAGE 3 (End): Close warmly in 6-10 words. Example: "Dhanyawaad! Dekhte hain Tue
       f0_up_key: 0,
       description: 'Polite, empathetic clinic receptionist',
     },
-    greeting: 'Namaste! Payal speaking from [doctor name] clinic. Kya appointment chahiye?',
-    persona: `You are Payal, clinic receptionist for Dr. [Name]. You are on a live phone call in India.
+    greeting: 'Namaste! Payal speaking from [doctor name] clinic. Aaj appointment book karni hai ya consultation ke liye call kiya hai?',
+    persona: `You are Payal, the clinic receptionist for Dr. [Name]'s clinic. You are on a live phone call in India.
 
 HOW YOU SPEAK:
-- ONE or TWO short sentences, warm and professional.
-- Hindi/English/Hinglish as caller prefers.
-- Respectful, empathetic tone.
+- ONE or TWO short sentences per turn. Warm, empathetic, and professional.
+- Bilingual Hindi and English (Hinglish) mix. Mirror caller's preferred language.
+- Respectful and reassuring tone like a trusted clinic front-desk manager.
 
-THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call.
+THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call. If unclear or noisy, roll with it in one sentence and ask a gentle clarifying question.
 
-STAGE 1: Greet, ask if appointment or consultation needed.
-STAGE 2: Capture symptoms lightly, find available slot, get patient details.
-STAGE 3: Confirm appointment time twice. Example: "Doctor ko Friday 10am pe milenge. Theek hai?"`,
+STAGE 1 (Start): Greet warmly, ask if they need a fresh appointment or follow-up consultation.
+STAGE 2 (Main): Lightly ask chief health issue or department needed, offer available doctor slot, and capture patient name and phone.
+STAGE 3 (End): Repeat appointment day and time twice. State clinic consultation fee policy if asked. Close warmly in 6-10 words: "Doctor ko Friday 10 baje milenge. Take care! Bye!"`,
     fields: [
       'patient_name',
       'phone',
@@ -181,11 +183,11 @@ STAGE 3: Confirm appointment time twice. Example: "Doctor ko Friday 10am pe mile
       'emergency_check',
     ],
     guardrails: [
-      'Absolute ban on medical diagnosis or prescribing medication - refer patient to doctor',
-      'Immediate escalation trigger for emergencies (chest pain, breathing difficulty, severe bleeding) - verbally redirect immediately to nearest emergency room / ambulance',
-      'Always confirm appointment date and time in repeat',
-      'Ask about patient history or previous visits if new patient',
-      'Clarify clinic consultation fee and walk-in policy',
+      'Absolute ban on medical diagnosis or prescribing medication - always refer patient to doctor',
+      'Immediate emergency escalation: If caller mentions chest pain, severe breathing difficulty, profuse bleeding, or acute trauma, immediately advise calling 108 or rushing to the nearest emergency room',
+      'Always confirm appointment date and time twice before closing',
+      'Clarify consultation fee (e.g. ₹500 general, ₹800 specialist) and walk-in policy when asked',
+      'Ask whether this is a first-time visit or a follow-up review',
     ],
   },
   {
@@ -201,19 +203,19 @@ STAGE 3: Confirm appointment time twice. Example: "Doctor ko Friday 10am pe mile
       f0_up_key: 0,
       description: 'Alert and helpful HVAC service receptionist',
     },
-    greeting: 'Hello! Payal here from [company] AC services. Kya problem aa rahi hai AC mein — cooling nahi ho rahi ya service karwani hai?',
-    persona: `You are Payal, service receptionist for HVAC & AC company. You are on a live phone call in India.
+    greeting: 'Hello! Payal here from [company] AC services. AC mein kya problem aa rahi hai — cooling nahi ho rahi, water leakage hai ya servicing karwani hai?',
+    persona: `You are Payal, the service coordinator for [company] AC & HVAC Services. You are on a live phone call in India.
 
 HOW YOU SPEAK:
-- ONE or TWO short sentences, quick and helpful.
-- Hindi/English/Hinglish, customer-friendly.
-- Show you understand AC issues.
+- ONE or TWO short sentences per turn. Helpful, direct, and empathetic.
+- Practical conversational Hindi, English, and Hinglish. Demonstrate HVAC troubleshooting familiarity.
+- Reassuring technician coordinator tone.
 
-THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call.
+THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call. Roll with noise and steer immediately to the core issue.
 
-STAGE 1: Greet, ask what AC issue they have.
-STAGE 2: Understand urgency (emergency vs scheduled), get address, capture issue type.
-STAGE 3: Confirm service timing. "Technician ko 2 ghante mein bhejenge. Address confirm kijiye?"`,
+STAGE 1 (Start): Greet, determine AC problem type (no cooling, gas refill, coil leak, routine maintenance).
+STAGE 2 (Main): Capture AC tonnage/brand (split vs window, Daikin, Voltas, LG), residential vs commercial, complete address with landmark, and preferred service time.
+STAGE 3 (End): State the standard visiting/inspection fee (e.g. ₹299 inspection) before dispatch, confirm appointment window twice. Close in 6-10 words: "Technician time pe pahunch jayenge. Dhanyawaad! Bye!"`,
     fields: [
       'customer_name',
       'phone',
@@ -224,10 +226,10 @@ STAGE 3: Confirm service timing. "Technician ko 2 ghante mein bhejenge. Address 
       'preferred_time',
     ],
     guardrails: [
-      'Emergency calls (complete heat failure, server room AC breakdown) get priority dispatch',
-      'Always confirm full address and landmark twice',
-      'Inform customer of visitation/inspection charges before technician dispatch',
-      'Ask if customer needs emergency weekend or night slot',
+      'Emergency prioritization: Server room shutdowns, clinic refrigeration, or vulnerable senior citizens during extreme heat waves get high-priority dispatch',
+      'Always confirm full street address, apartment number, and nearest landmark twice',
+      'Mandatory upfront disclosure of inspection/visitation charges before dispatching technician',
+      'Confirm if customer requires an emergency night or weekend service slot',
     ],
   },
   {
@@ -243,19 +245,19 @@ STAGE 3: Confirm service timing. "Technician ko 2 ghante mein bhejenge. Address 
       f0_up_key: 0,
       description: 'Courteous real estate inquiry receptionist',
     },
-    greeting: 'Hello! Payal bol rahi hoon [agency name] se. Aap property buy, sell ya rent karne ke liye call kar rahe hain?',
-    persona: `You are Payal, real estate inquiry receptionist. You are on a live phone call in India.
+    greeting: 'Hello! Payal bol rahi hoon [agency name] se. Aap property buy karne, sell karne ya rent pe lene ke liye dekh rahe hain?',
+    persona: `You are Payal, the property inquiry and lead qualification manager for [agency name]. You are on a live phone call in India.
 
 HOW YOU SPEAK:
-- ONE or TWO short sentences, warm and courteous.
-- Hindi/English/Hinglish mirroring.
-- Professional and encouraging.
+- ONE or TWO short sentences per turn. Warm, courteous, and sharp.
+- Fluid Hindi, English, and Hinglish mirroring.
+- Professional real estate consultant vibe.
 
-THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call.
+THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call. Steer conversation forward with an intuitive query.
 
-STAGE 1: Greet and ask property objective (buy, sell, rent).
-STAGE 2: Capture budget, preferred location, BHK configuration, timeline.
-STAGE 3: Offer site visit scheduling or WhatsApp brochure dispatch. Example: "Main details WhatsApp pe send karti hoon. Bye!"`,
+STAGE 1 (Start): Greet and qualify transaction intent: buying, selling, or renting.
+STAGE 2 (Main): Capture budget range, preferred localities, configuration (2 BHK, 3 BHK, villa), timeline for possession, and buyer's name/phone.
+STAGE 3 (End): Offer scheduling an on-site visit or sending floor plans and brochure on WhatsApp upon consent. Close warmly in 6-10 words: "Main details WhatsApp pe send karti hoon. Bye!"`,
     fields: [
       'caller_name',
       'phone',
@@ -267,10 +269,11 @@ STAGE 3: Offer site visit scheduling or WhatsApp brochure dispatch. Example: "Ma
       'site_visit_date',
     ],
     guardrails: [
-      'Do not quote locked unit rates or false inventory availability',
-      'Confirm budget and location preferences before proposing site visit',
-      'Schedule WhatsApp brochure transmission upon caller consent',
-      'Always confirm caller phone number and callback time',
+      'Do not quote locked unit rates or guarantee inventory without checking live listings',
+      'Confirm budget range and location preference before proposing an on-site visit',
+      'Request explicit caller consent before triggering WhatsApp brochure transmission',
+      'Always confirm caller phone number and preferred callback time',
+      'Identify if caller is an individual buyer or an external broker',
     ],
   },
   {
@@ -286,18 +289,19 @@ STAGE 3: Offer site visit scheduling or WhatsApp brochure dispatch. Example: "Ma
       f0_up_key: 0,
       description: 'Cheerful and polite table reservations host',
     },
-    greeting: 'Namaste! Payal speaking from [restaurant name]. Table reservation karni hai ya timings janne hain?',
-    persona: `You are Payal, restaurant table reservation receptionist. You are on a live phone call in India.
+    greeting: 'Namaste! Payal speaking from [restaurant name]. Aaj table reservation karwani hai ya menu aur timings janne hain?',
+    persona: `You are Payal, the table reservation host for [restaurant name]. You are on a live phone call in India.
 
 HOW YOU SPEAK:
-- ONE or TWO short sentences, polite, cheerful, and upbeat.
-- Hindi/English/Hinglish mirroring.
+- ONE or TWO short sentences per turn. Polite, cheerful, and upbeat.
+- Conversational Hindi, Indian English, and Hinglish mix. Mirror caller's flow.
+- Welcoming tone like a premier restaurant guest manager.
 
-THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call.
+THE ONE RULE: NEVER say "sorry, I didn't catch that" more than once in entire call. If noisy or muffled, keep the energy positive and ask one short follow-up.
 
-STAGE 1: Greet and ask booking date/time or question.
-STAGE 2: Capture guest count, special occasion, seating preference.
-STAGE 3: Confirm reservation details clearly. Example: "Friday raat 8 baje 4 logon ki table confirm hai. Dhanyawaad!"`,
+STAGE 1 (Start): Greet warmly, ask preferred date and time or lunch/dinner slot.
+STAGE 2 (Main): Capture party size (number of guests), guest name, seating preference (indoor AC vs outdoor terrace), and any special occasion (birthday, anniversary).
+STAGE 3 (End): Read back guest count, date, and time slot clearly. Remind about 15-minute grace period policy. Close in 6-10 words: "Friday raat 8 baje table confirm hai. Dekhte hain! Bye!"`,
     fields: [
       'guest_name',
       'contact_number',
@@ -308,10 +312,11 @@ STAGE 3: Confirm reservation details clearly. Example: "Friday raat 8 baje 4 log
       'special_occasion',
     ],
     guardrails: [
-      'Always read back party size, date, and time slot twice for confirmation',
-      'Direct severe allergy or special dietary questions to duty manager',
-      'Enforce table holding grace period limit (15 minutes)',
-      'Confirm indoor vs outdoor/terrace seating preference',
+      'Always read back party size, date, and time slot twice for explicit confirmation',
+      'Direct severe allergy requests or specialized catering queries to the duty manager',
+      'Enforce table holding grace period limit (15 minutes maximum before release)',
+      'Confirm indoor dining vs outdoor/terrace seating preference',
+      'Politely note cover charge or minimum billing on peak weekend nights if requested',
     ],
   },
   {
@@ -505,6 +510,28 @@ async function boot() {
     await db.query(`
       CREATE INDEX IF NOT EXISTS idx_tenant_call_routing_tenant ON tenant_call_routing(tenant_id);
     `).catch(() => {});
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS appointment_reminders (
+        id               TEXT PRIMARY KEY,
+        tenant_id        TEXT REFERENCES tenants(id) ON DELETE CASCADE,
+        appointment_id   TEXT NOT NULL,
+        scheduled_for    TIMESTAMPTZ NOT NULL,
+        channel          TEXT DEFAULT 'whatsapp',
+        status           TEXT DEFAULT 'scheduled',
+        last_error       TEXT,
+        attendee_phone   TEXT,
+        attendee_name    TEXT,
+        appointment_time TEXT,
+        business_name    TEXT,
+        created_at       TIMESTAMPTZ DEFAULT NOW()
+      );
+      CREATE INDEX IF NOT EXISTS idx_reminders_tenant    ON appointment_reminders(tenant_id);
+      CREATE INDEX IF NOT EXISTS idx_reminders_scheduled ON appointment_reminders(status, scheduled_for);
+      ALTER TABLE leads ADD COLUMN IF NOT EXISTS hubspot_contact_id TEXT;
+      ALTER TABLE calls  ADD COLUMN IF NOT EXISTS hubspot_call_id   TEXT;
+      CREATE INDEX IF NOT EXISTS idx_leads_hubspot ON leads(hubspot_contact_id);
+      ALTER TABLE client_settings ADD COLUMN IF NOT EXISTS hubspot_token TEXT;
+    `).catch(() => {});
   }
 
   const hasDemo = DEMO_EMAIL && existing.users.some((u) => u.email === DEMO_EMAIL);
@@ -612,7 +639,7 @@ function publicTenant(t) {
     status: t.status, privacyMode: t.privacyMode,
   };
 }
-function publicAgent(a) {
+function publicAgent(a, activeInboundId) {
   return {
     id: a.id, name: a.name, persona: a.persona, tts: a.tts,
     greeting: a.greeting, telephony: a.telephony, presetId: a.presetId || null,
@@ -620,6 +647,7 @@ function publicAgent(a) {
     dograhEmbedToken: a.dograhEmbedToken || a.dograh_embed_token || null,
     templateConfig: a.templateConfig || a.template_config || null,
     createdAt: a.createdAt,
+    isActiveInbound: Boolean(activeInboundId && a.id === activeInboundId),
   };
 }
 
@@ -1364,6 +1392,13 @@ async function apiLeadsCreate(req, res, ctx) {
       [leadId, ctx.tenant.id, name, phone, email, source, status, notes, assignedTo, now, now]
     );
     const lead = rows[0];
+    dispatchTenantWebhooks(ctx.tenant.id, 'lead.created', {
+      leadId: lead.id,
+      name: lead.name,
+      phone: lead.phone,
+      email: lead.email,
+      source: lead.source,
+    }).catch(() => {});
     return core.sendJson(res, 200, { lead: publicLead(lead) });
   }
 
@@ -1394,6 +1429,14 @@ async function apiLeadsCreate(req, res, ctx) {
       d.leads.push(lead);
     }
   });
+
+  dispatchTenantWebhooks(ctx.tenant.id, 'lead.created', {
+    leadId: lead.id,
+    name: lead.name,
+    phone: lead.phone,
+    email: lead.email,
+    source: lead.source,
+  }).catch(() => {});
 
   core.sendJson(res, 200, { lead: publicLead(lead) });
 }
@@ -1486,6 +1529,7 @@ async function apiLeadsPatch(req, res, ctx, id) {
         [actId, id, ctx.tenant.id, `Assigned to ${assignedTo || 'unassigned'}`, JSON.stringify({ from: oldAssigned, to: assignedTo }), ctx.user.id, now]
       );
     }
+    dispatchTenantWebhooks(ctx.tenant.id, 'lead.updated', { leadId: id, changes: b, updatedAt: now }).catch(() => {});
     return core.sendJson(res, 200, { lead: publicLead(updatedLead) });
   }
 
@@ -1529,6 +1573,7 @@ async function apiLeadsPatch(req, res, ctx, id) {
   if (!lead) {
     return core.sendJson(res, 404, { error: 'lead not found', code: 'not_found' });
   }
+  dispatchTenantWebhooks(ctx.tenant.id, 'lead.updated', { leadId: id, changes: b, updatedAt: now }).catch(() => {});
   core.sendJson(res, 200, { lead: publicLead(lead) });
 }
 
@@ -1760,8 +1805,12 @@ async function apiLeadActivitiesCreate(req, res, ctx, leadId) {
 
 async function apiAgentsList(req, res, ctx) {
   if (db.isPostgres) {
-    const { rows } = await db.query('SELECT * FROM agents WHERE tenant_id = $1 ORDER BY created_at DESC', [ctx.tenant.id]);
-    const agents = rows.map((a) => { 
+    const [aRes, rRes] = await Promise.all([
+      db.query('SELECT * FROM agents WHERE tenant_id = $1 ORDER BY created_at DESC', [ctx.tenant.id]),
+      db.query('SELECT inbound_agent_id FROM tenant_call_routing WHERE tenant_id = $1 LIMIT 1', [ctx.tenant.id]),
+    ]);
+    const activeInboundId = rRes.rows[0] ? (rRes.rows[0].inbound_agent_id || rRes.rows[0].inboundAgentId) : null;
+    const agents = aRes.rows.map((a) => { 
       const rawDate = a.createdAt || a.created_at; 
       const isoDate = rawDate ? (rawDate instanceof Date ? rawDate.toISOString() : new Date(rawDate).toISOString()) : new Date().toISOString(); 
       return publicAgent({ 
@@ -1770,13 +1819,15 @@ async function apiAgentsList(req, res, ctx) {
         presetId: a.presetId || a.preset_id, 
         templateConfig: a.templateConfig || a.template_config || null,
         createdAt: isoDate 
-      }); 
+      }, activeInboundId); 
     });
     return core.sendJson(res, 200, { agents });
   }
+  const routing = (core.db().tenantCallRouting || []).find((r) => (r.tenantId || r.tenant_id) === ctx.tenant.id);
+  const activeInboundId = routing ? (routing.inboundAgentId || routing.inbound_agent_id) : null;
   const agents = core.db().agents
     .filter((a) => a.tenantId === ctx.tenant.id)
-    .map(publicAgent);
+    .map((a) => publicAgent(a, activeInboundId));
   core.sendJson(res, 200, { agents });
 }
 
@@ -2545,6 +2596,24 @@ async function apiTelephonyDial(req, res, ctx) {
   }
 }
 
+// Resolve tenant HubSpot access token from client_settings or environment fallback
+async function getTenantHubspotToken(tenantId) {
+  if (db.isPostgres && tenantId) {
+    const sRes = await db.query(
+      `SELECT hubspot_token FROM client_settings WHERE tenant_id = $1`, [tenantId]
+    ).catch(() => ({ rows: [] }));
+    if (sRes.rows.length > 0 && (sRes.rows[0].hubspotToken || sRes.rows[0].hubspot_token)) {
+      return (sRes.rows[0].hubspotToken || sRes.rows[0].hubspot_token).trim();
+    }
+  } else if (tenantId) {
+    const cs = (core.db().clientSettings || []).find((item) => item.tenantId === tenantId || item.tenant_id === tenantId);
+    if (cs && (cs.hubspotToken || cs.hubspot_token)) {
+      return (cs.hubspotToken || cs.hubspot_token).trim();
+    }
+  }
+  return (process.env.HUBSPOT_ACCESS_TOKEN || '').trim() || null;
+}
+
 // POST /api/webhooks/dograh/call-completed -> Trigger engine for post-call automations.
 async function apiWebhookDograhCallCompleted(req, res, body = {}) {
   const expectedSecret = process.env.DOGRAH_WEBHOOK_SECRET;
@@ -2700,6 +2769,86 @@ async function apiWebhookDograhCallCompleted(req, res, body = {}) {
 
   bumpUsage(tenantId, 'calls', 1).catch(() => {});
 
+  // HubSpot CRM sync — setImmediate ensures this never delays Dograh's HTTP response
+  setImmediate(async () => {
+    try {
+      const accessToken = await getTenantHubspotToken(tenantId);
+      if (!accessToken) return;
+
+      const callerEmail = gatheredContext.email || null;
+      if (!callerEmail && !callerNumber) return;
+
+      const { contactId } = await hubspot.syncContact(accessToken, {
+        email: callerEmail || '',
+        phone: callerNumber,
+        firstname: (callerName || '').split(' ')[0] || '',
+        lastname: (callerName || '').split(' ').slice(1).join(' ') || '',
+      });
+
+      if (contactId && leadId && db.isPostgres) {
+        await db.query(
+          `UPDATE leads SET hubspot_contact_id = $1 WHERE id = $2 AND hubspot_contact_id IS NULL`,
+          [contactId, leadId]
+        ).catch(() => {});
+      }
+
+      if (contactId) {
+        const { engagementId } = await hubspot.logCallEngagement(accessToken, {
+          contactId,
+          duration,
+          transcript,
+          summary: gatheredContext.summary || '',
+          recordingUrl,
+          callDisposition: isMissed ? 'NO_ANSWER' : 'COMPLETED',
+        });
+
+        if (engagementId && db.isPostgres) {
+          await db.query(
+            `UPDATE calls SET hubspot_call_id = $1 WHERE id = $2 AND hubspot_call_id IS NULL`,
+            [engagementId, callId]
+          ).catch(() => {});
+        }
+      }
+    } catch (hsErr) {
+      console.warn(`[webhook] HubSpot sync failed for call ${callId}:`, hsErr.message);
+    }
+  });
+
+  // Dispatch post-call summary email asynchronously (non-blocking)
+  if (email.isConfigured()) {
+    email.sendCallSummary(tenantId, {
+      callerName,
+      callerPhone: callerNumber,
+      duration,
+      transcript,
+      summary: gatheredContext.summary || '',
+      leadId,
+      callId,
+      recordingUrl,
+    }).catch((err) => {
+      console.warn(`[webhook] Call summary email dispatch failed for call ${callId}:`, err.message);
+    });
+  }
+
+  // Dispatch WhatsApp post-call follow-up if requested/consented (non-blocking)
+  const wantsWhatsApp = Boolean(
+    gatheredContext.send_whatsapp ||
+    gatheredContext.send_brochure ||
+    gatheredContext.whatsapp_consent ||
+    gatheredContext.whatsapp ||
+    body.preset_category === 'realtor'
+  );
+  if (wantsWhatsApp && callerNumber && whatsapp.isConfigured()) {
+    const summaryText = gatheredContext.summary || (transcript ? transcript.slice(0, 240) : 'Thank you for speaking with our team.');
+    whatsapp.sendCallFollowup(callerNumber, {
+      tenantId,
+      customerName: callerName || 'Customer',
+      summary: summaryText,
+    }).catch((err) => {
+      console.warn(`[webhook] WhatsApp post-call follow-up failed for call ${callId}:`, err.message);
+    });
+  }
+
   if (isMissed && callerNumber) {
     let businessName = 'GetQualify';
     if (db.isPostgres) {
@@ -2716,6 +2865,26 @@ async function apiWebhookDograhCallCompleted(req, res, body = {}) {
     }).catch((err) => {
       console.error('[webhook] missed-call text-back error:', err.message);
     });
+  }
+
+  // Outbound webhooks for Zapier / n8n
+  dispatchTenantWebhooks(tenantId, isMissed ? 'call.missed' : 'call.completed', {
+    callId,
+    callerNumber,
+    duration,
+    status,
+    leadId: leadId || null,
+    recordingUrl: recordingUrl || null,
+    summary: gatheredContext.summary || '',
+  }).catch(() => {});
+
+  if (leadId) {
+    dispatchTenantWebhooks(tenantId, 'lead.created', {
+      leadId,
+      name: callerName || 'Customer',
+      phone: callerNumber,
+      source: 'inbound_call',
+    }).catch(() => {});
   }
 
   return core.sendJson(res, 200, {
@@ -2816,6 +2985,16 @@ async function apiCalendarBook(req, res, ctx, body = {}) {
       attendeePhone,
       leadId,
     });
+    dispatchTenantWebhooks(ctx.tenant.id, 'booking.created', {
+      bookingId: booking.eventId,
+      summary: booking.summary,
+      start: booking.start,
+      end: booking.end,
+      attendeeName,
+      attendeePhone: attendeePhone || null,
+      attendeeEmail: attendeeEmail || null,
+      leadId: leadId || null,
+    }).catch(() => {});
     return core.sendJson(res, 200, booking);
   } catch (err) {
     return core.sendJson(res, err.status || 500, { error: err.message, code: err.code || 'calendar_error' });
@@ -2956,6 +3135,92 @@ async function apiPaymentIntentCreate(req, res, ctx) {
   }
 
   core.sendJson(res, 201, { paymentIntent: { ...intent, intentToken: undefined, customer: undefined }, checkoutReady: !!checkout, checkout, message: checkout ? undefined : 'PayU is not configured. The intent is saved but cannot be paid yet.' });
+}
+
+async function apiRazorpayOrderCreate(req, res, ctx) {
+  if (rejectImpersonated(res, ctx)) return;
+  const b = ctx.body || {};
+  const packId = String(b.packId || '');
+  const pack = CREDIT_PACKS[packId];
+  if (!pack) {
+    return core.sendJson(res, 422, { error: 'Unknown credit pack', code: 'bad_pack' });
+  }
+
+  if (!razorpay.isConfigured()) {
+    return core.sendJson(res, 503, { error: 'Razorpay is not configured on this server', code: 'not_configured' });
+  }
+
+  const now = new Date().toISOString();
+  const intentId = core.genId('pay_');
+  const amountPaise = Math.round(Number(pack.amount) * 100);
+
+  let order;
+  try {
+    order = await razorpay.createOrder({
+      amountPaise,
+      currency: pack.currency || 'INR',
+      receipt: intentId,
+      notes: {
+        tenant_id: ctx.tenant.id,
+        user_id: ctx.user.id,
+        pack_id: packId,
+        intent_id: intentId,
+      },
+    });
+  } catch (err) {
+    return core.sendJson(res, err.status || 502, { error: err.message, code: err.code || 'razorpay_error' });
+  }
+
+  const customer = {
+    firstname: String(b.firstname || ctx.user.name || 'Customer').trim().slice(0, 60),
+    email: ctx.user.email,
+    phone: String(b.phone || '').trim().slice(0, 20),
+  };
+
+  const intent = {
+    id: intentId,
+    tenantId: ctx.tenant.id,
+    userId: ctx.user.id,
+    provider: 'razorpay',
+    txnid: order.id,
+    packId,
+    productinfo: pack.productinfo,
+    amount: pack.amount,
+    amountPaise,
+    credits: pack.credits,
+    customer,
+    gatewayPayload: order,
+    status: 'pending',
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  if (db.isPostgres) {
+    await db.transaction(async (client) => {
+      await client.query(
+        `INSERT INTO payment_intents (id, tenant_id, user_id, provider, txnid, pack_id, product_info, amount, amount_paise, credits, customer, gateway_payload, intent_token, status, created_at, updated_at)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`,
+        [intent.id, ctx.tenant.id, ctx.user.id, intent.provider, intent.txnid, packId, intent.productinfo, intent.amount, intent.amountPaise, intent.credits, JSON.stringify(customer), JSON.stringify(order), null, intent.status, now, now]
+      );
+      await db.addAuditSql(client, ctx, 'billing.razorpay_order.created', 'payment_intent', intent.id, { packId, orderId: order.id, amountPaise });
+    });
+  } else {
+    await core.mutate((d) => {
+      if (!d.paymentIntents) d.paymentIntents = [];
+      d.paymentIntents.push(intent);
+      addAudit(d, ctx, 'billing.razorpay_order.created', 'payment_intent', intent.id, { packId, orderId: order.id, amountPaise });
+    });
+  }
+
+  return core.sendJson(res, 201, {
+    ok: true,
+    orderId: order.id,
+    keyId: process.env.RAZORPAY_KEY_ID,
+    amount: order.amount,
+    currency: order.currency,
+    packId,
+    intentId,
+  });
 }
 
 async function apiPayuCallback(req, res, payload) {
@@ -3885,6 +4150,7 @@ const INDUSTRY_TEMPLATES = Object.freeze({
 
 function publicClientSettings(s) {
   if (!s) return null;
+  const token = s.hubspotToken || s.hubspot_token || null;
   return {
     tenantId: s.tenantId || s.tenant_id,
     industry: s.industry || '',
@@ -3893,6 +4159,8 @@ function publicClientSettings(s) {
     knowledgeBase: s.knowledgeBase || s.knowledge_base || '',
     customFields: s.customFields || s.custom_fields || {},
     calendarProvider: s.calendarProvider || s.calendar_provider || null,
+    hubspotToken: token,
+    hubspotConnected: Boolean(token || process.env.HUBSPOT_ACCESS_TOKEN),
     updatedAt: toIso(s.updatedAt || s.updated_at),
   };
 }
@@ -4147,19 +4415,25 @@ async function apiAdminTenantSettingsPatch(req, res, ctx, tenantId) {
     const businessHours = b.businessHours !== undefined ? b.businessHours : (existing ? (existing.businessHours || existing.business_hours || {}) : {});
     const knowledgeBase = b.knowledgeBase !== undefined ? String(b.knowledgeBase).trim() : (existing ? existing.knowledgeBase : '');
     const customFields = b.customFields !== undefined ? b.customFields : (existing ? (existing.customFields || existing.custom_fields || {}) : {});
+    const hubspotToken = b.hubspot_token !== undefined
+      ? (b.hubspot_token ? String(b.hubspot_token).trim() : null)
+      : (b.hubspotToken !== undefined
+        ? (b.hubspotToken ? String(b.hubspotToken).trim() : null)
+        : (existing ? (existing.hubspotToken || existing.hubspot_token || null) : null));
 
     const uRes = await db.query(
-      `INSERT INTO client_settings (tenant_id, industry, timezone, business_hours, knowledge_base, custom_fields, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+      `INSERT INTO client_settings (tenant_id, industry, timezone, business_hours, knowledge_base, custom_fields, hubspot_token, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (tenant_id) DO UPDATE SET
          industry = EXCLUDED.industry,
          timezone = EXCLUDED.timezone,
          business_hours = EXCLUDED.business_hours,
          knowledge_base = EXCLUDED.knowledge_base,
          custom_fields = EXCLUDED.custom_fields,
+         hubspot_token = EXCLUDED.hubspot_token,
          updated_at = EXCLUDED.updated_at
        RETURNING *`,
-      [tenantId, industry, timezone, JSON.stringify(businessHours), knowledgeBase, JSON.stringify(customFields), now]
+      [tenantId, industry, timezone, JSON.stringify(businessHours), knowledgeBase, JSON.stringify(customFields), hubspotToken, now]
     );
     return core.sendJson(res, 200, { settings: publicClientSettings(uRes.rows[0]) });
   }
@@ -4186,6 +4460,8 @@ async function apiAdminTenantSettingsPatch(req, res, ctx, tenantId) {
     if (b.businessHours !== undefined) settings.businessHours = b.businessHours;
     if (b.knowledgeBase !== undefined) settings.knowledgeBase = String(b.knowledgeBase).trim();
     if (b.customFields !== undefined) settings.customFields = b.customFields;
+    if (b.hubspot_token !== undefined) settings.hubspot_token = b.hubspot_token ? String(b.hubspot_token).trim() : null;
+    if (b.hubspotToken !== undefined) settings.hubspot_token = b.hubspotToken ? String(b.hubspotToken).trim() : null;
     settings.updatedAt = now;
   });
 
@@ -4705,18 +4981,38 @@ async function apiWebhookRazorpay(req, res, body) {
 
     const now = new Date().toISOString();
     const eventId = core.genId('pev_');
-    const intentId = core.genId('pi_');
     const invoiceId = core.genId('inv_');
+    const actorUserId = payment.notes?.user_id || null;
+
+    let intentId = payment.notes?.intent_id || null;
+    if (!intentId && payment.order_id) {
+      const match = await db.query('SELECT id FROM payment_intents WHERE txnid = $1 OR gateway_payload->>\'id\' = $1 LIMIT 1', [payment.order_id]);
+      if (match.rowCount > 0) intentId = match.rows[0].id;
+    }
+    if (!intentId) intentId = core.genId('pi_');
 
     await db.withTransaction(async (client) => {
-      // Credit ledger
-      await db.addLedgerEntrySql(client, tenantId, amountPaise, 'razorpay_payment', txnid, { payment_id: txnid });
+      // Credit ledger with correct 7 arguments:
+      // (client, tenantId, amountPaise, type, reference, actorUserId, metadata = {})
+      await db.addLedgerEntrySql(client, tenantId, amountPaise, 'razorpay_payment', txnid, actorUserId, {
+        payment_id: txnid,
+        order_id: payment.order_id || null,
+        pack_id: payment.notes?.pack_id || null,
+      });
+
+      // Update payment_intents if row exists
+      await client.query(
+        'UPDATE payment_intents SET status = $1, updated_at = $2 WHERE id = $3 OR txnid = $4',
+        ['credited', now, intentId, payment.order_id || '']
+      );
+
       // Record event
       await client.query(
         `INSERT INTO payment_events (id, provider, tenant_id, payment_intent_id, txnid, status, payload, created_at)
          VALUES ($1, 'razorpay', $2, $3, $4, 'captured', $5, $6)`,
         [eventId, tenantId, intentId, txnid, JSON.stringify(payment), now]
       );
+
       // Auto-create invoice
       const invNum = `RZP-${txnid.slice(-6).toUpperCase()}`;
       await client.query(
@@ -4727,12 +5023,57 @@ async function apiWebhookRazorpay(req, res, body) {
       );
     });
     // Dispatch outbound webhooks
-    await dispatchTenantWebhooks(tenantId, 'payment.captured', { txnid, amountPaise, provider: 'razorpay' });
+    await dispatchTenantWebhooks(tenantId, 'payment.captured', { txnid, amountPaise, provider: 'razorpay', orderId: payment.order_id || null });
     return core.sendJson(res, 200, { ok: true });
   }
 
   // JSON driver fallback
-  return core.sendJson(res, 200, { ok: true, note: 'wallet credit requires postgres driver' });
+  let jsonDuplicate = false;
+  await core.mutate((d) => {
+    if (!d.paymentEvents) d.paymentEvents = [];
+    if (d.paymentEvents.some((e) => e.txnid === txnid && e.provider === 'razorpay')) {
+      jsonDuplicate = true;
+      return;
+    }
+    const wallet = (d.wallets || []).find((w) => w.tenantId === tenantId);
+    if (wallet) {
+      wallet.balancePaise = (wallet.balancePaise || 0) + amountPaise;
+      wallet.updatedAt = new Date().toISOString();
+    }
+    if (!d.ledger) d.ledger = [];
+    d.ledger.push({
+      id: core.genId('led_'),
+      tenantId,
+      amountPaise,
+      type: 'razorpay_payment',
+      idempotencyKey: txnid,
+      balanceAfterPaise: wallet ? wallet.balancePaise : amountPaise,
+      actorUserId: payment.notes?.user_id || null,
+      metadata: { payment_id: txnid, order_id: payment.order_id || null },
+      createdAt: new Date().toISOString(),
+    });
+    const intentId = payment.notes?.intent_id || null;
+    if (intentId && d.paymentIntents) {
+      const pi = d.paymentIntents.find((p) => p.id === intentId || p.txnid === payment.order_id);
+      if (pi) {
+        pi.status = 'credited';
+        pi.updatedAt = new Date().toISOString();
+      }
+    }
+    d.paymentEvents.push({
+      id: core.genId('pev_'),
+      provider: 'razorpay',
+      tenantId,
+      paymentIntentId: intentId,
+      txnid,
+      status: 'captured',
+      payload: payment,
+      createdAt: new Date().toISOString(),
+    });
+  });
+  if (jsonDuplicate) return core.sendJson(res, 200, { ok: true, duplicate: true });
+  await dispatchTenantWebhooks(tenantId, 'payment.captured', { txnid, amountPaise, provider: 'razorpay', orderId: payment.order_id || null });
+  return core.sendJson(res, 200, { ok: true });
 }
 
 /* ==========================================================================
@@ -4755,8 +5096,29 @@ async function apiWhatsappNotify(req, res, ctx) {
   const b = ctx.body || {};
   const { to, templateName, languageCode, components } = b;
   if (!to || !templateName) return core.sendJson(res, 422, { error: 'to and templateName are required', code: 'missing_fields' });
-  const result = await whatsapp.sendTemplateMessage(to, templateName, languageCode || 'en_US', components || []);
-  core.sendJson(res, 200, { ok: true, result });
+  try {
+    const result = await whatsapp.sendTemplateMessage(to, templateName, languageCode || 'en_US', components || []);
+    const metaId = (result && result.messages && result.messages[0] && result.messages[0].id) || null;
+    await whatsapp.logMessage({
+      tenantId: ctx.tenant.id,
+      recipientPhone: to,
+      templateName,
+      status: (result && result.error) ? 'failed' : 'sent',
+      metaMessageId: metaId,
+      payload: { languageCode, components, response: result },
+    });
+    core.sendJson(res, 200, { ok: true, result });
+  } catch (err) {
+    await whatsapp.logMessage({
+      tenantId: ctx.tenant.id,
+      recipientPhone: to,
+      templateName,
+      status: 'failed',
+      metaMessageId: null,
+      payload: { languageCode, components, error: err.message },
+    });
+    core.sendJson(res, err.status || 502, { error: err.message, code: err.code || 'whatsapp_error' });
+  }
 }
 
 /* ==========================================================================
@@ -4808,13 +5170,22 @@ async function apiOutboundQueue(req, res, ctx) {
    ========================================================================== */
 
 async function dispatchTenantWebhooks(tenantId, event, data) {
-  if (!db.isPostgres) return;
   try {
-    const { rows } = await db.query(
-      `SELECT * FROM webhook_endpoints WHERE tenant_id=$1 AND status='active' AND (events='{}' OR $2=ANY(events))`,
-      [tenantId, event]
-    );
-    for (const ep of rows) {
+    let endpoints = [];
+    if (db.isPostgres) {
+      const { rows } = await db.query(
+        `SELECT * FROM webhook_endpoints WHERE tenant_id=$1 AND status='active' AND (events='{}' OR $2=ANY(events))`,
+        [tenantId, event]
+      );
+      endpoints = rows;
+    } else {
+      endpoints = (core.db().webhookEndpoints || []).filter(
+        (ep) => (ep.tenantId === tenantId || ep.tenant_id === tenantId) &&
+                ep.status === 'active' &&
+                (!ep.events || !ep.events.length || ep.events.includes(event))
+      );
+    }
+    for (const ep of endpoints) {
       const payload = JSON.stringify({ event, data, tenantId, timestamp: new Date().toISOString() });
       const sig = crypto.createHmac('sha256', ep.secret).update(payload).digest('hex');
       // Fire-and-forget with failure tracking
@@ -4837,13 +5208,30 @@ async function dispatchTenantWebhooks(tenantId, event, data) {
             req.end();
           });
           // Reset failure count on success
-          await db.query('UPDATE webhook_endpoints SET failure_count=0 WHERE id=$1', [ep.id]);
+          if (db.isPostgres) {
+            await db.query('UPDATE webhook_endpoints SET failure_count=0 WHERE id=$1', [ep.id]);
+          } else {
+            await core.mutate((d) => {
+              const e = (d.webhookEndpoints || []).find((x) => x.id === ep.id);
+              if (e) e.failureCount = 0;
+            });
+          }
         } catch (_) {
           // Increment failure count; disable after 10 consecutive failures
-          await db.query(
-            `UPDATE webhook_endpoints SET failure_count=failure_count+1, status=CASE WHEN failure_count+1>=10 THEN 'failing' ELSE status END WHERE id=$1`,
-            [ep.id]
-          );
+          if (db.isPostgres) {
+            await db.query(
+              `UPDATE webhook_endpoints SET failure_count=failure_count+1, status=CASE WHEN failure_count+1>=10 THEN 'failing' ELSE status END WHERE id=$1`,
+              [ep.id]
+            );
+          } else {
+            await core.mutate((d) => {
+              const e = (d.webhookEndpoints || []).find((x) => x.id === ep.id);
+              if (e) {
+                e.failureCount = (e.failureCount || 0) + 1;
+                if (e.failureCount >= 10) e.status = 'failing';
+              }
+            });
+          }
         }
       })().catch(() => {});
     }
@@ -4855,7 +5243,17 @@ async function apiWebhookEndpointsList(req, res, ctx) {
     const { rows } = await db.query('SELECT id,url,events,status,failure_count,created_at FROM webhook_endpoints WHERE tenant_id=$1 ORDER BY created_at DESC', [ctx.tenant.id]);
     return core.sendJson(res, 200, { endpoints: rows });
   }
-  core.sendJson(res, 200, { endpoints: [] });
+  const eps = (core.db().webhookEndpoints || [])
+    .filter((e) => (e.tenantId || e.tenant_id) === ctx.tenant.id)
+    .map((e) => ({
+      id: e.id,
+      url: e.url,
+      events: e.events || [],
+      status: e.status || 'active',
+      failure_count: e.failureCount || e.failure_count || 0,
+      created_at: e.createdAt || e.created_at,
+    }));
+  core.sendJson(res, 200, { endpoints: eps });
 }
 
 async function apiWebhookEndpointsCreate(req, res, ctx) {
@@ -4874,7 +5272,12 @@ async function apiWebhookEndpointsCreate(req, res, ctx) {
     );
     return core.sendJson(res, 201, { endpoint: rows[0], secret });
   }
-  core.sendJson(res, 201, { endpoint: { id, url, events, status: 'active' }, secret, note: 'requires postgres driver to persist' });
+  const ep = { id, tenantId: ctx.tenant.id, url, events, secret, status: 'active', failureCount: 0, createdAt: now };
+  await core.mutate((d) => {
+    if (!d.webhookEndpoints) d.webhookEndpoints = [];
+    d.webhookEndpoints.push(ep);
+  });
+  core.sendJson(res, 201, { endpoint: { id, url, events, status: 'active', failure_count: 0, created_at: now }, secret });
 }
 
 async function apiWebhookEndpointsDelete(req, res, ctx, id) {
@@ -4883,7 +5286,72 @@ async function apiWebhookEndpointsDelete(req, res, ctx, id) {
     if (rowCount === 0) return core.sendJson(res, 404, { error: 'endpoint not found', code: 'not_found' });
     return core.sendJson(res, 200, { ok: true });
   }
+  let deleted = false;
+  await core.mutate((d) => {
+    const initialLen = (d.webhookEndpoints || []).length;
+    d.webhookEndpoints = (d.webhookEndpoints || []).filter((e) => !(e.id === id && (e.tenantId === ctx.tenant.id || e.tenant_id === ctx.tenant.id)));
+    if (d.webhookEndpoints.length < initialLen) deleted = true;
+  });
+  if (!deleted) return core.sendJson(res, 404, { error: 'endpoint not found', code: 'not_found' });
   core.sendJson(res, 200, { ok: true });
+}
+
+async function apiWebhookEndpointsPing(req, res, ctx, id) {
+  let ep = null;
+  if (db.isPostgres) {
+    const { rows } = await db.query('SELECT * FROM webhook_endpoints WHERE id=$1 AND tenant_id=$2', [id, ctx.tenant.id]);
+    if (rows.length > 0) ep = rows[0];
+  } else {
+    ep = (core.db().webhookEndpoints || []).find((e) => e.id === id && (e.tenantId === ctx.tenant.id || e.tenant_id === ctx.tenant.id));
+  }
+  if (!ep) return core.sendJson(res, 404, { error: 'endpoint not found', code: 'not_found' });
+
+  const payload = JSON.stringify({
+    event: 'ping',
+    data: {
+      message: 'Test ping from GetQualify Agency OS',
+      endpointId: ep.id,
+      timestamp: new Date().toISOString(),
+    },
+    tenantId: ctx.tenant.id,
+    timestamp: new Date().toISOString(),
+  });
+  const sig = crypto.createHmac('sha256', ep.secret).update(payload).digest('hex');
+
+  const startTime = Date.now();
+  try {
+    const url = new URL(ep.url);
+    const statusCode = await new Promise((resolve, reject) => {
+      const opts = {
+        hostname: url.hostname,
+        port: url.port || (url.protocol === 'https:' ? 443 : 80),
+        path: url.pathname + url.search,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-GetQualify-Signature': sig,
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      };
+      const mod = url.protocol === 'https:' ? require('https') : require('http');
+      const pingReq = mod.request(opts, (resp) => {
+        resp.resume();
+        resolve(resp.statusCode);
+      });
+      pingReq.on('error', reject);
+      pingReq.setTimeout(5000, () => {
+        pingReq.destroy();
+        reject(new Error('Webhook ping timed out after 5000ms'));
+      });
+      pingReq.write(payload);
+      pingReq.end();
+    });
+    const latencyMs = Date.now() - startTime;
+    return core.sendJson(res, 200, { ok: true, status: statusCode, latencyMs });
+  } catch (err) {
+    const latencyMs = Date.now() - startTime;
+    return core.sendJson(res, 502, { ok: false, error: err.message, latencyMs });
+  }
 }
 
 /* ==========================================================================
@@ -5064,6 +5532,7 @@ const server = http.createServer(async (req, res) => {
           return core.requireAuth(req, res, (rq, rs, ctx) => apiCallRecordingGet(rq, rs, ctx, callId));
         }
         if (route === '/api/routing') return core.requireAuth(req, res, apiRoutingGet);
+        if (route === '/api/settings') return core.requireAuth(req, res, (rq, rs, ctx) => apiAdminTenantSettingsGet(rq, rs, ctx, ctx.tenant.id));
         return core.sendJson(res, 404, { error: 'no such endpoint', code: 'not_found' });
       }
 
@@ -5076,6 +5545,9 @@ const server = http.createServer(async (req, res) => {
           return core.sendJson(res, tooBig ? 413 : 400, {
             error: e.message, code: tooBig ? 'too_large' : 'bad_body',
           });
+        }
+        if (route === '/api/settings') {
+          return core.requireRole(req, res, 'owner', (rq, rs, ctx) => apiAdminTenantSettingsPatch(rq, rs, ctx, ctx.tenant.id), body);
         }
         if (route.startsWith('/api/leads/')) {
           const leadSub = decodeURIComponent(route.slice('/api/leads/'.length));
@@ -5155,6 +5627,7 @@ const server = http.createServer(async (req, res) => {
       if (route === '/api/routing/update') return core.requireAuth(req, res, apiRoutingUpdate, body);
       if (route === '/api/telephony/dial') return core.requireAuth(req, res, apiTelephonyDial, body);
       if (route === '/api/payment-intents') return core.requireAuth(req, res, apiPaymentIntentCreate, body);
+      if (route === '/api/billing/razorpay/order') return core.requireAuth(req, res, apiRazorpayOrderCreate, body);
       if (route === '/api/support/tickets') return core.requireAuth(req, res, apiSupportCreate, body);
       if (route === '/api/support/tickets/reply') return core.requireAuth(req, res, apiSupportReply, body);
       if (route === '/api/byon') return core.requireRole(req, res, 'owner', apiByonSave, body);
@@ -5191,6 +5664,11 @@ const server = http.createServer(async (req, res) => {
       if (route === '/api/telephony/outbound/schedule') return core.requireRole(req, res, 'owner', apiOutboundSchedule, body);
       // Phase 7: Webhook endpoint registration
       if (route === '/api/webhooks/endpoints') return core.requireRole(req, res, 'owner', apiWebhookEndpointsCreate, body);
+      if (route.startsWith('/api/webhooks/endpoints/') && route.endsWith('/ping')) {
+        const epId = decodeURIComponent(route.slice('/api/webhooks/endpoints/'.length, -'/ping'.length));
+        if (!epId || epId.includes('/')) return core.sendJson(res, 404, { error: 'endpoint not found', code: 'not_found' });
+        return core.requireRole(req, res, 'owner', (rq, rs, ctx) => apiWebhookEndpointsPing(rq, rs, ctx, epId), body);
+      }
       if (route === '/api/integrations/calendar/book') return core.requireAuth(req, res, apiCalendarBook, body);
 
       return core.sendJson(res, 404, { error: 'no such endpoint', code: 'not_found' });

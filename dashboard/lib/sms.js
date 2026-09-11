@@ -86,41 +86,81 @@ async function send({ to, templateId, variables = {}, senderId = process.env.MSG
 
 /**
  * Send missed-call text-back to a caller within seconds of a missed call.
+ * Uses MSG91 Flow API for Indian numbers when configured, and falls back to Twilio.
  */
 async function sendMissedCallTextBack(to, { businessName = 'GetQualify', callbackNumber = '' } = {}) {
+  const cleanTo = String(to || '').trim();
+  const digits = cleanTo.replace(/\D/g, '');
+  const isIndian = /^\+91/.test(cleanTo) || (digits.length === 10 && /^[6-9]/.test(digits)) || (digits.length === 12 && digits.startsWith('91'));
   const templateId = process.env.MSG91_MISSED_CALL_TEMPLATE_ID;
-  if (!templateId) {
-    console.warn('[sms] MSG91_MISSED_CALL_TEMPLATE_ID not configured; skipping missed-call text-back');
-    return null;
+
+  // 1. If Indian or only MSG91 is configured, try MSG91 first
+  if (process.env.MSG91_AUTH_KEY && templateId && (isIndian || !process.env.TWILIO_ACCOUNT_SID)) {
+    try {
+      return await send({
+        to: cleanTo,
+        templateId,
+        variables: {
+          business_name: businessName,
+          callback_number: callbackNumber,
+        },
+      });
+    } catch (err) {
+      console.warn(`[sms] MSG91 missed-call textback failed (${err.message}). Attempting Twilio fallback...`);
+    }
   }
-  return send({
-    to,
-    templateId,
-    variables: {
-      business_name: businessName,
-      callback_number: callbackNumber,
-    },
-  });
+
+  // 2. International or MSG91 fallback via Twilio
+  if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
+    const cbMsg = callbackNumber ? ` Please call us back at ${callbackNumber}.` : '';
+    const body = `Hi, you called ${businessName}. We missed your call.${cbMsg}`;
+    return sendViaTwilio(cleanTo, body);
+  }
+
+  if (!templateId && !process.env.TWILIO_ACCOUNT_SID) {
+    console.warn('[sms] Neither MSG91 nor Twilio configured for missed-call text-back');
+  }
+  return null;
 }
 
 /**
  * Send appointment confirmation SMS upon successful calendar booking.
+ * Uses MSG91 Flow API for Indian numbers when configured, and falls back to Twilio.
  */
 async function sendAppointmentConfirmation(to, { businessName = 'GetQualify', appointmentTime = '', agentName = '' } = {}) {
+  const cleanTo = String(to || '').trim();
+  const digits = cleanTo.replace(/\D/g, '');
+  const isIndian = /^\+91/.test(cleanTo) || (digits.length === 10 && /^[6-9]/.test(digits)) || (digits.length === 12 && digits.startsWith('91'));
   const templateId = process.env.MSG91_BOOKING_TEMPLATE_ID;
-  if (!templateId) {
-    console.warn('[sms] MSG91_BOOKING_TEMPLATE_ID not configured; skipping booking confirmation');
-    return null;
+
+  // 1. If Indian or only MSG91 is configured, try MSG91 first
+  if (process.env.MSG91_AUTH_KEY && templateId && (isIndian || !process.env.TWILIO_ACCOUNT_SID)) {
+    try {
+      return await send({
+        to: cleanTo,
+        templateId,
+        variables: {
+          business_name: businessName,
+          appointment_time: appointmentTime,
+          agent_name: agentName,
+        },
+      });
+    } catch (err) {
+      console.warn(`[sms] MSG91 booking confirmation failed (${err.message}). Attempting Twilio fallback...`);
+    }
   }
-  return send({
-    to,
-    templateId,
-    variables: {
-      business_name: businessName,
-      appointment_time: appointmentTime,
-      agent_name: agentName,
-    },
-  });
+
+  // 2. International or MSG91 fallback via Twilio
+  if (process.env.TWILIO_ACCOUNT_SID && process.env.TWILIO_AUTH_TOKEN && process.env.TWILIO_FROM_NUMBER) {
+    const agentMsg = agentName ? ` Booked by ${agentName}.` : '';
+    const body = `Your appointment with ${businessName} is confirmed for ${appointmentTime}.${agentMsg}`;
+    return sendViaTwilio(cleanTo, body);
+  }
+
+  if (!templateId && !process.env.TWILIO_ACCOUNT_SID) {
+    console.warn('[sms] Neither MSG91 nor Twilio configured for booking confirmation');
+  }
+  return null;
 }
 
 /**
@@ -173,14 +213,17 @@ async function sendViaTwilio(to, body) {
     throw new SmsError('Twilio not configured (TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN / TWILIO_FROM_NUMBER missing)', 503, 'twilio_not_configured');
   }
 
-  const params = new URLSearchParams({ To: to, From: from, Body: String(body).slice(0, 1600) });
+  const cleanTo = String(to || '').trim();
+  const formattedTo = cleanTo.startsWith('+') ? cleanTo : `+${cleanTo}`;
+
+  const params = new URLSearchParams({ To: formattedTo, From: from, Body: String(body).slice(0, 1600) });
   const payload = params.toString();
   const auth = Buffer.from(`${sid}:${token}`).toString('base64');
   const path = `/2010-04-01/Accounts/${sid}/Messages.json`;
 
-  const { https } = require('https');
+  const https = require('https');
   const result = await new Promise((resolve, reject) => {
-    const req = require('https').request({
+    const req = https.request({
       hostname: 'api.twilio.com',
       path,
       method: 'POST',
@@ -207,7 +250,7 @@ async function sendViaTwilio(to, body) {
     throw new SmsError(`Twilio dispatch failed: ${msg}`, result.status >= 400 && result.status < 500 ? result.status : 502, 'upstream_sms_error', result.data);
   }
 
-  return { status: result.status, data: result.data, to };
+  return { status: result.status, data: result.data, to: formattedTo };
 }
 
 /**
