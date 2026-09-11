@@ -69,7 +69,7 @@ rsh "mkdir -p /opt/getqualify/dashboard /opt/getqualify/dashboard/data && chown 
 
 # 6. Rsync dashboard code and stack files to remote VPS
 say "Syncing dashboard code to remote VPS..."
-rsync -a -e "ssh -o StrictHostKeyChecking=no -i $SSH_KEY" \
+rsync -a --delete -e "ssh -o StrictHostKeyChecking=no -i $SSH_KEY" \
   --exclude .env --exclude data --exclude node_modules \
   "$ROOT/dashboard/" "root@$VPS_IP:/opt/getqualify/dashboard/"
 
@@ -164,3 +164,9 @@ else
 fi
 
 ok "GetQualify Dashboard successfully deployed to http://$VPS_IP:$PORT/app.html"
+
+# 14. Write deployment verification tracker
+if [ -n "${GITHUB_SHA:-}" ]; then
+  say "Writing deployment verification file (DEPLOYED_COMMIT.txt)..."
+  rsh "echo '$GITHUB_SHA' > /opt/getqualify/DEPLOYED_COMMIT.txt"
+fi

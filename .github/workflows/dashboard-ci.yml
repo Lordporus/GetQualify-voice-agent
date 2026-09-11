@@ -144,3 +144,4 @@ jobs:
           WHATSAPP_PHONE_NUMBER_ID: ${{ secrets.WHATSAPP_PHONE_NUMBER_ID || '' }}
           WHATSAPP_APP_SECRET: ${{ secrets.WHATSAPP_APP_SECRET || '' }}
           WHATSAPP_WEBHOOK_VERIFY_TOKEN: ${{ secrets.WHATSAPP_WEBHOOK_VERIFY_TOKEN || '' }}
+          GITHUB_SHA: ${{ github.sha }}
